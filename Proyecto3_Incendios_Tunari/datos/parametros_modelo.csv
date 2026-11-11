@@ -1,0 +1,18 @@
+﻿parametro,valor,descripcion,fuente
+p_h,0.58,Probabilidad base de propagación (valor inicial; se recalibra en la sección 10),Alexandridis et al. (2008); recalibrado con el incendio del 12/08/2026
+a,0.078,Coeficiente de pendiente (1/grado),Alexandridis et al. (2008)
+c1,0.045,Coeficiente de viento c1 (s/m),Alexandridis et al. (2008)
+c2,0.131,Coeficiente de viento c2 (s/m),Alexandridis et al. (2008)
+p_veg_arborea,0.4,"Ajuste por vegetación arbórea (eucalipto, pino)",Alexandridis et al. (2008)
+p_veg_matorral,0.0,Ajuste por matorral,Alexandridis et al. (2008)
+p_veg_pastizal,0.0,Ajuste por pajonal,"Supuesto del equipo (informe, Tabla 9)"
+p_veg_cultivo,-0.3,Ajuste por cultivo,Alexandridis et al. (2008)
+p_den_escasa,-0.4,Ajuste por densidad escasa,Alexandridis et al. (2008)
+p_den_normal,0.0,Ajuste por densidad normal,Alexandridis et al. (2008)
+p_den_densa,0.3,Ajuste por densidad alta,Alexandridis et al. (2008)
+tamano_celda_m,25.0,Lado de la celda (m),Diseño del modelo
+minutos_por_paso,3.0,Duración de un paso del autómata,Decisión de diseño (sección 10)
+rendimiento_m_h,150.0,Metros de línea cortafuegos por hora por cuadrilla de 10 personas en pajonal,SUPUESTO: reemplazar con la entrevista (pregunta 5)
+s_salto,0.004,Probabilidad de salto de pavesas por (m/s) de viento y por paso,SUPUESTO: ajustar con la experiencia de los bomberos
+pasos_ardiendo,4.0,"Pasos que arde una celda de pajonal, matorral o cultivo (4 × 3 min = 12 min)",Supuesto: tiempo para consumir una celda de 25 m
+pasos_ardiendo_arborea,6.0,Pasos que arde una celda de eucalipto o pino (18 min),Supuesto: mayor carga de combustible

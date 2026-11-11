@@ -1,0 +1,9 @@
+﻿n,fecha,sector,municipio,superficie_ha,hora_inicio,duracion,causa_reportada,fuente,observacion
+1,2026-10-17,Laguna Wara Wara,Cercado,0.5,~11:00 (detección),No informada,Chaqueo para preparar terreno de siembra,Eju.tv (2026),Fecha de la nota
+2,2026-10-13,Bellavista – Pocopampa,Sacaba,,~12:30,~7 h (controlado 19:30),No informada,Los Tiempos (2026b),
+3,2026-10-06,Potrero,Quillacollo,10.0,No informada,"6 a 8 días, 6 reactivaciones",No informada; el viento agravó la propagación,Los Tiempos (2026b),Fecha inferida
+4,2026-08-31,"Arocagua, Los Arévalos y Larati",Sacaba,,No informada,Hasta la madrugada del 01/09,Presunto descuido,Los Tiempos (2026a),
+5,2026-08-12,Cercado (zona no precisada),Cercado,43.0,15:10,~3 h 20 min (control 18:30),Presuntamente provocado (en investigación),Éxito Noticias (2026),INCENDIO DE REFERENCIA
+A1,2026-06-22,Leuquepampa,Cercado,50.0,No informada,22 y 23 de junio,No informada,Red Uno (2026),Antecedente; >50 ha
+A2,2026-07-29,Candelaria,Cercado,6.0,No informada,No informada,No informada,El Diario (2026a),Antecedente
+A3,2025-08-22,Parque Tunari,No precisado,350.0,No informada,No informada,No informada,Opinión (2025),Antecedente; >350 ha
