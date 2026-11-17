@@ -143,6 +143,12 @@ uniform float uElevMax;`)
 const WORLD_SIZE = 60;      // tamaño del terreno en unidades Three.js (metros "escénicos")
 const ALTURA_EXAGERA = 1.8; // exageración vertical para que el relieve se note en VR
 
+// Detección simple de celular/tablet (pantalla táctil como entrada principal),
+// para bajar automáticamente el costo gráfico donde más se nota: resolución
+// real de píxeles, antialiasing y densidad de vegetación con sombra.
+const ES_MOVIL = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+const DENSIDAD_VEG = ES_MOVIL ? 0.55 : 1; // factor sobre las probabilidades de poblar árboles/pasto
+
 const state = {
   terreno: null,
   escenarios: {},
@@ -243,7 +249,7 @@ function crearCieloYLuces() {
   const sol = new THREE.DirectionalLight(0xffecc8, 2.3);
   sol.position.set(-WORLD_SIZE * 0.5, WORLD_SIZE * 0.6, WORLD_SIZE * 0.2); // tarde, sol bajo
   sol.castShadow = true;
-  sol.shadow.mapSize.set(1024, 1024);
+  sol.shadow.mapSize.set(ES_MOVIL ? 512 : 1024, ES_MOVIL ? 512 : 1024);
   sol.shadow.camera.left = -WORLD_SIZE; sol.shadow.camera.right = WORLD_SIZE;
   sol.shadow.camera.top = WORLD_SIZE; sol.shadow.camera.bottom = -WORLD_SIZE;
   scene.add(sol);
@@ -386,7 +392,7 @@ function construirVegetacion() {
   const idxArboles = [];
   for (let k = 0; k < combustibleIdx.length; k++) {
     const { i, j } = combustibleIdx[k];
-    if (t.clase[i][j] === 10 && !t.lineaCortafuegos250[i][j] && Math.random() < 0.92) idxArboles.push(k);
+    if (t.clase[i][j] === 10 && !t.lineaCortafuegos250[i][j] && Math.random() < 0.92 * DENSIDAD_VEG) idxArboles.push(k);
   }
   const copaGeo = new THREE.ConeGeometry(0.42, 1.5, 6);
   copaGeo.translate(0, 0.75, 0);
@@ -425,7 +431,7 @@ function construirVegetacion() {
   for (let k = 0; k < combustibleIdx.length; k++) {
     const { i, j } = combustibleIdx[k];
     const c = t.clase[i][j];
-    if ((c === 20 || c === 30 || c === 40) && !t.lineaCortafuegos250[i][j] && Math.random() < 0.55) idxPasto.push(k);
+    if ((c === 20 || c === 30 || c === 40) && !t.lineaCortafuegos250[i][j] && Math.random() < 0.55 * DENSIDAD_VEG) idxPasto.push(k);
   }
   const p1 = new THREE.PlaneGeometry(0.55, 0.42); p1.translate(0, 0.21, 0);
   const p2 = p1.clone(); p2.rotateY(Math.PI / 2);
@@ -821,6 +827,207 @@ function aplicarMapaDeRiesgo(activar) {
   $('statTiempo').textContent = '8H SIN CTRL';
 }
 
+/* ------------- análisis comparativo: qué estrategia es mejor ------------ */
+// Usa los datos reales exportados por export_data.py: el estado final de
+// las dos corridas calibradas (sin intervención / cortafuegos a 250 m, mismo
+// punto de ignición y mismo viento del "peor día") más el contexto del mapa
+// de riesgo de 150 corridas de Monte Carlo (zona de ignición y viento
+// variables, igual criterio que la Figura 8 del informe).
+
+function statsFinalesDe(nombreEsc) {
+  const esc = state.escenarios[nombreEsc];
+  const frame = esc.frames[esc.frames.length - 1];
+  const n = state.terreno.n;
+  const borde = state.terreno.urbano;
+  let haQuemadas = 0;
+  let llegaBorde = false;
+  for (let k = 0; k < combustibleIdx.length; k++) {
+    const { i, j } = combustibleIdx[k];
+    if (frame[i][j] >= 2) {
+      haQuemadas++;
+      if (!llegaBorde) {
+        for (let di = -1; di <= 1 && !llegaBorde; di++) {
+          for (let dj = -1; dj <= 1 && !llegaBorde; dj++) {
+            const ii = i + di, jj = j + dj;
+            if (ii >= 0 && jj >= 0 && ii < n && jj < n && borde[ii][jj]) llegaBorde = true;
+          }
+        }
+      }
+    }
+  }
+  const ha = haQuemadas * (state.terreno.celda_m ** 2 / 10000);
+  const minutos = Math.round((esc.frames.length - 1) * (esc.dtMin * esc.pasosGuardadosCada));
+  return { ha, llegaBorde, minutos };
+}
+
+function calcularAnalisis() {
+  const base = statsFinalesDe('base');
+  const corta = statsFinalesDe('cortafuegos250');
+  const mapa = state.riesgo.mapa;
+  let sumaP = 0, altoRiesgo = 0, total = 0;
+  for (let k = 0; k < combustibleIdx.length; k++) {
+    const { i, j } = combustibleIdx[k];
+    const p = mapa[i][j];
+    sumaP += p; total++;
+    if (p >= 0.5) altoRiesgo++;
+  }
+  const riesgoProm = total ? sumaP / total : 0;
+  const pctAltoRiesgo = total ? (altoRiesgo / total) * 100 : 0;
+  const reduccionPct = base.ha > 0 ? ((base.ha - corta.ha) / base.ha) * 100 : 0;
+  const mejor = corta.ha < base.ha ? 'cortafuegos250' : 'base';
+  state.analisis = { base, corta, riesgoProm, pctAltoRiesgo, reduccionPct, mejor };
+  return state.analisis;
+}
+
+function pintarVeredicto() {
+  const a = state.analisis;
+  const txt = $('veredictoTxt');
+  const sub = $('veredictoSub');
+  if (a.mejor === 'cortafuegos250') {
+    txt.innerHTML = `✓ MEJOR OPCIÓN: <span style="color:var(--green)">CORTAFUEGOS A 250M</span> — ${a.reduccionPct.toFixed(0)}% MENOS ÁREA QUEMADA`;
+  } else {
+    txt.innerHTML = `⚠ EL CORTAFUEGOS NO MEJORA EL RESULTADO EN ESTA CORRIDA`;
+  }
+  sub.textContent =
+    `Sin intervención: ${a.base.ha.toFixed(1)} ha quemadas` +
+    (a.base.llegaBorde ? ' (llega a viviendas)' : '') +
+    ` · Con cortafuegos: ${a.corta.ha.toFixed(1)} ha` +
+    (a.corta.llegaBorde ? ' (llega a viviendas)' : ' (no llega a viviendas)') +
+    ` · Riesgo base de la zona (150 corridas MC): ${a.pctAltoRiesgo.toFixed(0)}% de las celdas combustibles con más de 50% de probabilidad de quemarse.`;
+}
+
+/* --------------- animación de despliegue del cortafuegos 250m --------------- */
+// Construye una línea + postes tácticos siguiendo la franja real
+// (lineaCortafuegos250), ordenada por vecino más cercano para que forme un
+// trazo continuo, y la anima "dibujándose" cuando se elige ese escenario.
+
+let cortafuegosPuntos = [];
+let lineaCortafuegosObj = null;
+let marcadoresCortafuegos = []; // [{ mesh, frac }]
+let chispaCortafuegos = null;
+const animCortafuegos = { activo: false, t: 0, duracion: 1.8 };
+
+function construirLineaCortafuegosViz() {
+  const t = state.terreno;
+  const n = t.n;
+  const celdas = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (t.lineaCortafuegos250[i][j]) celdas.push({ i, j });
+    }
+  }
+  if (celdas.length === 0) return;
+
+  const usados = new Array(celdas.length).fill(false);
+  let actual = 0;
+  for (let k = 1; k < celdas.length; k++) {
+    if (celdas[k].i + celdas[k].j < celdas[actual].i + celdas[actual].j) actual = k;
+  }
+  const orden = [actual]; usados[actual] = true;
+  for (let paso = 1; paso < celdas.length; paso++) {
+    const c0 = celdas[actual];
+    let mejor = -1, mejorD = Infinity;
+    for (let k = 0; k < celdas.length; k++) {
+      if (usados[k]) continue;
+      const dd = (celdas[k].i - c0.i) ** 2 + (celdas[k].j - c0.j) ** 2;
+      if (dd < mejorD) { mejorD = dd; mejor = k; }
+    }
+    if (mejor === -1) break;
+    usados[mejor] = true; orden.push(mejor); actual = mejor;
+  }
+
+  cortafuegosPuntos = orden.map((k) => {
+    const { i, j } = celdas[k];
+    const [x, z] = xzDe(i, j);
+    return new THREE.Vector3(x, heightAt(i, j) + 0.3, z);
+  });
+
+  const geo = new THREE.BufferGeometry().setFromPoints(cortafuegosPuntos);
+  const mat = new THREE.LineBasicMaterial({ color: 0x5fe3ef, transparent: true, opacity: 0.95, fog: false });
+  lineaCortafuegosObj = new THREE.Line(geo, mat);
+  lineaCortafuegosObj.visible = false;
+  lineaCortafuegosObj.frustumCulled = false;
+  scene.add(lineaCortafuegosObj);
+
+  const nPtos = cortafuegosPuntos.length;
+  const PASO = Math.max(1, Math.floor(nPtos / 40));
+  const geoPoste = new THREE.ConeGeometry(0.1, 0.5, 4);
+  geoPoste.translate(0, 0.25, 0);
+  const matPoste = new THREE.MeshBasicMaterial({ color: 0xff8a3d });
+  for (let p = 0; p < nPtos; p += PASO) {
+    const mesh = new THREE.Mesh(geoPoste, matPoste);
+    mesh.position.copy(cortafuegosPuntos[p]);
+    mesh.scale.setScalar(0.0001);
+    mesh.visible = false;
+    scene.add(mesh);
+    marcadoresCortafuegos.push({ mesh, frac: p / Math.max(1, nPtos - 1) });
+  }
+
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  g.addColorStop(0, 'rgba(230,255,255,1)'); g.addColorStop(0.4, 'rgba(95,227,239,0.9)'); g.addColorStop(1, 'rgba(95,227,239,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 32, 32);
+  chispaCortafuegos = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false, fog: false }));
+  chispaCortafuegos.scale.setScalar(0.9);
+  chispaCortafuegos.visible = false;
+  scene.add(chispaCortafuegos);
+}
+
+function iniciarAnimCortafuegos() {
+  if (!lineaCortafuegosObj) return;
+  animCortafuegos.activo = true;
+  animCortafuegos.t = 0;
+  lineaCortafuegosObj.visible = true;
+  lineaCortafuegosObj.geometry.setDrawRange(0, 0);
+  for (const m of marcadoresCortafuegos) { m.mesh.visible = true; m.mesh.scale.setScalar(0.0001); }
+  chispaCortafuegos.visible = true;
+}
+
+function mostrarCortafuegosCompleto() {
+  if (!lineaCortafuegosObj) return;
+  animCortafuegos.activo = false;
+  lineaCortafuegosObj.visible = true;
+  lineaCortafuegosObj.geometry.setDrawRange(0, cortafuegosPuntos.length);
+  for (const m of marcadoresCortafuegos) { m.mesh.visible = true; m.mesh.scale.setScalar(1); }
+  chispaCortafuegos.visible = false;
+}
+
+function ocultarCortafuegosViz() {
+  animCortafuegos.activo = false;
+  if (lineaCortafuegosObj) lineaCortafuegosObj.visible = false;
+  for (const m of marcadoresCortafuegos) m.mesh.visible = false;
+  if (chispaCortafuegos) chispaCortafuegos.visible = false;
+}
+
+function actualizarAnimCortafuegos(dt) {
+  if (!animCortafuegos.activo) return;
+  animCortafuegos.t += dt;
+  const t = Math.min(1, animCortafuegos.t / animCortafuegos.duracion);
+  const nPtos = cortafuegosPuntos.length;
+  lineaCortafuegosObj.geometry.setDrawRange(0, Math.max(1, Math.floor(t * nPtos)));
+
+  const idxFloat = t * (nPtos - 1);
+  const idx = Math.floor(idxFloat);
+  const frac = idxFloat - idx;
+  const p0 = cortafuegosPuntos[idx];
+  const p1 = cortafuegosPuntos[Math.min(nPtos - 1, idx + 1)];
+  chispaCortafuegos.position.lerpVectors(p0, p1, frac);
+  chispaCortafuegos.position.y += 0.12;
+
+  for (const marcador of marcadoresCortafuegos) {
+    if (marcador.frac > t) continue;
+    const aparicion = THREE.MathUtils.clamp((t - marcador.frac) * 6, 0, 1);
+    const rebote = 1 + Math.sin(aparicion * Math.PI) * 0.3 * (1 - aparicion);
+    marcador.mesh.scale.setScalar(aparicion * rebote);
+  }
+
+  if (t >= 1) {
+    animCortafuegos.activo = false;
+    chispaCortafuegos.visible = false;
+  }
+}
+
 /* ------------------------------- UI ----------------------------------- */
 
 function poblarBrujula() {
@@ -837,16 +1044,23 @@ function wireUI() {
   $('btnBase').addEventListener('click', () => {
     state.escenarioActual = 'base'; state.frameIdx = 0; state.modoRiesgo = false;
     $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active');
+    ocultarCortafuegosViz();
     aplicarFrame();
   });
   $('btnCortafuegos').addEventListener('click', () => {
     state.escenarioActual = 'cortafuegos250'; state.frameIdx = 0; state.modoRiesgo = false;
     $('btnCortafuegos').classList.add('active'); $('btnBase').classList.remove('active'); $('btnRiesgo').classList.remove('active');
     aplicarFrame();
+    iniciarAnimCortafuegos();
   });
   $('btnRiesgo').addEventListener('click', () => {
     const activar = !state.modoRiesgo;
     $('btnRiesgo').classList.toggle('active', activar);
+    if (activar) {
+      ocultarCortafuegosViz();
+    } else if (state.escenarioActual === 'cortafuegos250') {
+      mostrarCortafuegosCompleto();
+    }
     aplicarMapaDeRiesgo(activar);
   });
   const setIconoPlay = (reproduciendo) => {
@@ -1061,7 +1275,10 @@ function construirDron() {
     const modelo = droneModeloGLTF.clone(true);
     modelo.traverse((o) => {
       if (o.isMesh) {
-        o.castShadow = true;
+        // Sin sombra: es una malla real de ~93k vértices y el dron se mueve
+        // todo el tiempo — proyectar su sombra cada frame sale caro y casi
+        // no se nota (es un objeto chico, volando). Esto ahorra bastante.
+        o.castShadow = false;
         if (o.material) { o.material = o.material.clone(); o.material.roughness = 0.5; o.material.metalness = 0.25; }
       }
     });
@@ -1090,7 +1307,7 @@ function construirDron() {
   drone.userData.luz = luz;
 
   drone.scale.setScalar(1.7);
-  drone.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  drone.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
   scene.add(drone);
 
   // anillo de "escaneo térmico" que se usa al llegar a destino
@@ -1231,10 +1448,11 @@ async function main() {
   await cargarDatos();
 
   const app = $('app');
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({ antialias: !ES_MOVIL });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, ES_MOVIL ? 1.5 : 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = ES_MOVIL ? THREE.BasicShadowMap : THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   app.appendChild(renderer.domElement);
 
@@ -1243,6 +1461,9 @@ async function main() {
 
   crearCieloYLuces();
   construirTerreno();
+  calcularAnalisis();
+  pintarVeredicto();
+  construirLineaCortafuegosViz();
   construirVegetacion();
   construirOverlayDeFuego();
   construirHumo();
@@ -1300,6 +1521,7 @@ async function main() {
     actualizarHumo(dt);
     actualizarFuego(dt);
     actualizarNubes(dt);
+    actualizarAnimCortafuegos(dt);
     if (!introState.activo && !state.modoRiesgo) {
       actualizarEmisionFuego(dt);
       actualizarLucesIncendio(dt);
