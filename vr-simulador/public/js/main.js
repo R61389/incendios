@@ -9,14 +9,31 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
  * ------------------------------------------------------------------ */
 
 const COLORES_CLASE = {
-  10: 0x1e6b30, // arbórea (eucalipto/pino)
-  20: 0x8fb339, // matorral
-  30: 0xe3c567, // pastizal (pajonal)
-  40: 0xc99b5f, // cultivo
-  50: 0x7f7f7f, // zona construida
-  60: 0xb9b0a3, // roca / suelo desnudo
-  80: 0x3b83c4, // agua
+  10: 0x3a5e32, // arbórea (eucalipto/pino) — verde oliva oscuro, real
+  20: 0x87954a, // matorral — verde seco
+  30: 0xc6a052, // pastizal (pajonal) — dorado seco de época seca
+  40: 0xad8550, // cultivo — pardo tierra
+  50: 0x8d8579, // zona construida — gris cálido (techos/calles)
+  60: 0xa89d89, // roca / suelo desnudo — beige grisáceo
+  80: 0x3f7096, // agua — azul profundo
 };
+
+/* ---------------------- ruido simple (sin dependencias) ------------------- */
+function hashRuido(x, y) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return s - Math.floor(s);
+}
+function ruidoSuave(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const h00 = hashRuido(xi, yi), h10 = hashRuido(xi + 1, yi);
+  const h01 = hashRuido(xi, yi + 1), h11 = hashRuido(xi + 1, yi + 1);
+  return (h00 * (1 - u) + h10 * u) * (1 - v) + (h01 * (1 - u) + h11 * u) * v;
+}
+function ruidoFBM(x, y) {
+  return ruidoSuave(x, y) * 0.55 + ruidoSuave(x * 2.6, y * 2.6) * 0.3 + ruidoSuave(x * 7.1, y * 7.1) * 0.15;
+}
 const COLOR_EN_LLAMAS = new THREE.Color(0xff6a1a);
 const COLOR_QUEMADA = new THREE.Color(0x2a1812);
 const COLOR_CORTAFUEGOS = new THREE.Color(0x3a3a3a);
@@ -57,20 +74,82 @@ let fireMesh, smokeSystem;
 let combustibleIdx = []; // [{i,j,x,y,z}]
 let heightAt; // función (i,j)->altura escénica
 
-function crearCieloYLuces() {
-  scene.background = new THREE.Color(0xbfd9ea);
-  scene.fog = new THREE.Fog(0xcfe3ee, WORLD_SIZE * 0.6, WORLD_SIZE * 2.4);
+let nubes = [];
 
-  const hemi = new THREE.HemisphereLight(0xffeedd, 0x3a3f33, 1.1);
+function crearCieloYLuces() {
+  // Cúpula de cielo con degradado (cenit azul pálido -> horizonte cálido de tarde)
+  const radioCielo = WORLD_SIZE * 4;
+  const geoCielo = new THREE.SphereGeometry(radioCielo, 32, 20);
+  const posC = geoCielo.attributes.position;
+  const coloresCielo = new Float32Array(posC.count * 3);
+  const cZenit = new THREE.Color(0x5f8fc4);
+  const cHorizonte = new THREE.Color(0xf6c89a);
+  const cBajoHorizonte = new THREE.Color(0xcf9f6e);
+  const tmp = new THREE.Color();
+  for (let k = 0; k < posC.count; k++) {
+    const y = posC.getY(k) / radioCielo; // -1..1
+    let t;
+    if (y >= 0) { t = Math.pow(1 - y, 1.6); tmp.copy(cZenit).lerp(cHorizonte, t); }
+    else { t = Math.pow(1 + y * 3, 1.2); tmp.copy(cBajoHorizonte).lerp(cHorizonte, Math.max(0, t)); }
+    coloresCielo[k * 3] = tmp.r; coloresCielo[k * 3 + 1] = tmp.g; coloresCielo[k * 3 + 2] = tmp.b;
+  }
+  geoCielo.setAttribute('color', new THREE.BufferAttribute(coloresCielo, 3));
+  const matCielo = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false });
+  scene.add(new THREE.Mesh(geoCielo, matCielo));
+
+  scene.background = new THREE.Color(0xdcb98e);
+  scene.fog = new THREE.FogExp2(0xe4c9a3, 0.0115);
+
+  const hemi = new THREE.HemisphereLight(0xfff0dd, 0x4a4433, 1.15);
   scene.add(hemi);
 
-  const sol = new THREE.DirectionalLight(0xfff1dd, 2.1);
+  const sol = new THREE.DirectionalLight(0xffecc8, 2.3);
   sol.position.set(-WORLD_SIZE * 0.5, WORLD_SIZE * 0.6, WORLD_SIZE * 0.2); // tarde, sol bajo
   sol.castShadow = true;
   sol.shadow.mapSize.set(1024, 1024);
   sol.shadow.camera.left = -WORLD_SIZE; sol.shadow.camera.right = WORLD_SIZE;
   sol.shadow.camera.top = WORLD_SIZE; sol.shadow.camera.bottom = -WORLD_SIZE;
   scene.add(sol);
+
+  // resplandor del sol (sprite con degradado radial, sin textura externa)
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,244,214,0.95)');
+  g.addColorStop(0.35, 'rgba(255,220,160,0.45)');
+  g.addColorStop(1, 'rgba(255,220,160,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+  const solSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, fog: false,
+  }));
+  solSprite.scale.set(WORLD_SIZE * 1.1, WORLD_SIZE * 1.1, 1);
+  solSprite.position.copy(sol.position).multiplyScalar(3);
+  scene.add(solSprite);
+
+  // nubes simples (sprites con degradado suave), derivando lentamente
+  const cNube = document.createElement('canvas'); cNube.width = cNube.height = 128;
+  const ctxN = cNube.getContext('2d');
+  const gN = ctxN.createRadialGradient(64, 64, 10, 64, 64, 64);
+  gN.addColorStop(0, 'rgba(255,250,245,0.85)');
+  gN.addColorStop(0.6, 'rgba(255,245,235,0.4)');
+  gN.addColorStop(1, 'rgba(255,245,235,0)');
+  ctxN.fillStyle = gN; ctxN.fillRect(0, 0, 128, 128);
+  const texNube = new THREE.CanvasTexture(cNube);
+  for (let i = 0; i < 10; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: texNube, transparent: true, depthWrite: false, opacity: 0.8 }));
+    const escala = WORLD_SIZE * (0.5 + Math.random() * 0.6);
+    s.scale.set(escala * 1.6, escala * 0.7, 1);
+    s.position.set((Math.random() - 0.5) * WORLD_SIZE * 3.5, WORLD_SIZE * (0.55 + Math.random() * 0.35), (Math.random() - 0.5) * WORLD_SIZE * 3.5);
+    scene.add(s);
+    nubes.push({ sprite: s, vel: 0.15 + Math.random() * 0.25 });
+  }
+}
+
+function actualizarNubes(dt) {
+  for (const n of nubes) {
+    n.sprite.position.x += n.vel * dt;
+    if (n.sprite.position.x > WORLD_SIZE * 2) n.sprite.position.x = -WORLD_SIZE * 2;
+  }
 }
 
 function construirTerreno() {
@@ -91,6 +170,7 @@ function construirTerreno() {
 
   // La grilla fila=i (norte->sur), col=j (oeste->este); PlaneGeometry recorre
   // filas de -Z a +Z y columnas de -X a +X en el mismo orden de creación.
+  const hsl = { h: 0, s: 0, l: 0 };
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       const k = i * n + j;
@@ -100,6 +180,12 @@ function construirTerreno() {
         color.copy(COLOR_CORTAFUEGOS);
       } else {
         color.set(COLORES_CLASE[clase] ?? 0x999999);
+        // Variación natural tipo "parches" (más real que un color plano por celda)
+        const ruido = ruidoFBM(i * 0.14, j * 0.14);
+        color.getHSL(hsl);
+        hsl.l = Math.min(0.92, Math.max(0.05, hsl.l + (ruido - 0.5) * 0.22));
+        hsl.s = Math.min(1, Math.max(0, hsl.s * (0.85 + ruido * 0.3)));
+        color.setHSL(hsl.h, hsl.s, hsl.l);
       }
       colores[k * 3] = color.r; colores[k * 3 + 1] = color.g; colores[k * 3 + 2] = color.b;
     }
@@ -341,10 +427,10 @@ function wireUI() {
   });
   $('btnPlay').addEventListener('click', () => {
     state.playing = !state.playing;
-    $('btnPlay').textContent = state.playing ? '⏸' : '▶';
+    $('btnPlay').querySelector('.ic').textContent = state.playing ? '⏸' : '▶';
   });
   $('scrub').addEventListener('input', (e) => {
-    state.playing = false; $('btnPlay').textContent = '▶';
+    state.playing = false; $('btnPlay').querySelector('.ic').textContent = '▶';
     state.frameIdx = Number(e.target.value);
     aplicarFrame();
   });
@@ -441,6 +527,206 @@ function salirStereoManual() {
 
 /* --------------------------------- main ---------------------------------- */
 
+/* ------------------------------- dron térmico (intro) ---------------------------- */
+
+let drone, helices = [], anilloEscaneo;
+const introState = {
+  activo: true, t: 0,
+  padPos: null, destino: null,
+  camInicio: null, camFinal: null, targetFinal: null,
+};
+
+function facilitarSuave(t) { return t * t * (3 - 2 * t); } // smootherstep simple
+
+function encontrarPadCercaDeUrbano() {
+  const t = state.terreno; const n = t.n; const [ii, jj] = t.ignicion;
+  let mejor = [ii, jj], mejorD = Infinity;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (t.urbano[i][j]) {
+        const d = (i - ii) ** 2 + (j - jj) ** 2;
+        if (d < mejorD) { mejorD = d; mejor = [i, j]; }
+      }
+    }
+  }
+  return mejor;
+}
+
+function construirDron() {
+  drone = new THREE.Group();
+  const matCuerpo = new THREE.MeshStandardMaterial({ color: 0x23272b, roughness: 0.35, metalness: 0.65 });
+  const matHelice = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.25, metalness: 0.3 });
+
+  const cuerpo = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.5), matCuerpo);
+  cuerpo.castShadow = true;
+  drone.add(cuerpo);
+
+  const gimbal = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.2 }));
+  gimbal.position.set(0, -0.15, 0.05);
+  drone.add(gimbal);
+  const lenteTermico = new THREE.Mesh(new THREE.CircleGeometry(0.045, 10), new THREE.MeshBasicMaterial({ color: 0xff8a3d }));
+  lenteTermico.position.set(0, -0.2, 0.1);
+  lenteTermico.rotation.x = -Math.PI / 2.3;
+  drone.add(lenteTermico);
+
+  const luz = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff2b2b }));
+  luz.position.set(0, 0.1, -0.23);
+  drone.add(luz);
+  drone.userData.luz = luz;
+
+  const esquinas = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+  for (const [sx, sz] of esquinas) {
+    const ox = sx * 0.42, oz = sz * 0.42;
+    const brazo = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.6, 6), matCuerpo);
+    brazo.position.set(ox / 2, 0.02, oz / 2);
+    brazo.rotation.z = Math.PI / 2;
+    brazo.rotation.y = -Math.atan2(oz, ox);
+    drone.add(brazo);
+    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.07, 8), matCuerpo);
+    motor.position.set(ox, 0.05, oz);
+    drone.add(motor);
+    const helice = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.01, 0.04), matHelice);
+    helice.position.set(ox, 0.095, oz);
+    drone.add(helice);
+    helices.push(helice);
+  }
+  drone.scale.setScalar(1.7);
+  drone.castShadow = true;
+  scene.add(drone);
+
+  // anillo de "escaneo térmico" que se usa al llegar a destino
+  anilloEscaneo = new THREE.Mesh(
+    new THREE.RingGeometry(0.3, 0.42, 32),
+    new THREE.MeshBasicMaterial({ color: 0xff8a3d, transparent: true, opacity: 0, side: THREE.DoubleSide }),
+  );
+  anilloEscaneo.rotation.x = -Math.PI / 2;
+  scene.add(anilloEscaneo);
+}
+
+function construirPad(pos) {
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.1, 1.2, 0.12, 20),
+    new THREE.MeshStandardMaterial({ color: 0x2e2e2e, roughness: 0.8 }),
+  );
+  base.position.copy(pos).add(new THREE.Vector3(0, 0.06, 0));
+  base.receiveShadow = true;
+  scene.add(base);
+  const marca = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 0.68, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffb04d }),
+  );
+  marca.rotation.x = -Math.PI / 2;
+  marca.position.copy(pos).add(new THREE.Vector3(0, 0.13, 0));
+  scene.add(marca);
+}
+
+function iniciarIntro(camInicioSugerida, camFinal, targetFinal) {
+  const [pi, pj] = encontrarPadCercaDeUrbano();
+  const [px, pz] = xzDe(pi, pj);
+  const py = heightAt(pi, pj);
+  introState.padPos = new THREE.Vector3(px, py, pz);
+
+  const [ix, iz] = xzDe(state.terreno.ignicion[0], state.terreno.ignicion[1]);
+  const iy = heightAt(state.terreno.ignicion[0], state.terreno.ignicion[1]);
+  introState.destino = new THREE.Vector3(ix, iy + WORLD_SIZE * 0.1, iz);
+
+  introState.camFinal = camFinal.clone();
+  introState.targetFinal = targetFinal.clone();
+
+  construirDron();
+  construirPad(introState.padPos);
+  drone.position.copy(introState.padPos).add(new THREE.Vector3(0, 0.08, 0));
+
+  const dirPad = introState.padPos.clone().sub(introState.destino).setY(0).normalize();
+  camera.position.copy(introState.padPos).add(dirPad.multiplyScalar(3.2)).add(new THREE.Vector3(0, 1.6, 0));
+  camera.lookAt(introState.padPos.clone().add(new THREE.Vector3(0, 0.5, 0)));
+
+  $('introCaption').style.display = 'flex';
+  $('btnSkipIntro').style.display = 'block';
+}
+
+function finalizarIntro() {
+  introState.activo = false;
+  camera.position.copy(introState.camFinal);
+  controls.target.copy(introState.targetFinal);
+  controls.enabled = true;
+  controls.update();
+  $('introCaption').style.display = 'none';
+  $('btnSkipIntro').style.display = 'none';
+  document.getElementById('hud').classList.add('visible');
+  $('stats').classList.add('visible');
+  $('brand').classList.add('visible');
+  aplicarFrame();
+}
+
+function saltarIntro() {
+  introState.t = 999;
+  if (drone) { drone.position.copy(introState.destino); }
+  finalizarIntro();
+}
+
+function actualizarIntro(dt) {
+  if (!introState.activo) return;
+  introState.t += dt;
+  const t = introState.t;
+  const girarHelices = (vel) => { for (const h of helices) h.rotation.y += vel * dt; };
+
+  if (t < 1.1) {
+    // despegando: hélices acelerando, cámara fija mirando el dron
+    girarHelices(THREE.MathUtils.lerp(2, 55, Math.min(1, t / 1.1)));
+    $('introCaption').querySelector('.capTxt').textContent = 'Preparando el dron térmico…';
+  } else if (t < 2.0) {
+    girarHelices(55);
+    const u = facilitarSuave((t - 1.1) / 0.9);
+    drone.position.y = introState.padPos.y + 0.08 + u * 1.6;
+    $('introCaption').querySelector('.capTxt').textContent = 'Despegando…';
+  } else if (t < 6.2) {
+    girarHelices(55);
+    const u = facilitarSuave((t - 2.0) / 4.2);
+    const p = new THREE.Vector3().lerpVectors(
+      introState.padPos.clone().add(new THREE.Vector3(0, 1.68, 0)),
+      introState.destino, u,
+    );
+    p.y += Math.sin(u * Math.PI) * (WORLD_SIZE * 0.07); // arco de vuelo
+    const anterior = drone.position.clone();
+    drone.position.copy(p);
+    const avance = p.clone().sub(anterior);
+    if (avance.lengthSq() > 1e-6) drone.rotation.y = Math.atan2(avance.x, avance.z);
+    drone.rotation.z = THREE.MathUtils.lerp(drone.rotation.z, -Math.min(0.18, avance.length() * 2), 0.2);
+
+    const detras = p.clone().sub(introState.destino).setY(0);
+    if (detras.lengthSq() < 0.01) detras.set(0, 0, 1);
+    detras.normalize().multiplyScalar(4.2);
+    camera.position.lerp(p.clone().add(detras).add(new THREE.Vector3(0, 2.1, 0)), 0.12);
+    camera.lookAt(p);
+    $('introCaption').querySelector('.capTxt').textContent = 'Volando hacia la zona del incendio…';
+  } else if (t < 7.8) {
+    girarHelices(38);
+    drone.position.copy(introState.destino);
+    drone.rotation.z = THREE.MathUtils.lerp(drone.rotation.z, 0, 0.1);
+    const u = (t - 6.2) / 1.6;
+    anilloEscaneo.position.set(introState.destino.x, introState.destino.y - WORLD_SIZE * 0.095, introState.destino.z);
+    const esc = 1 + u * 2.5;
+    anilloEscaneo.scale.set(esc, esc, esc);
+    anilloEscaneo.material.opacity = Math.sin(Math.min(1, u) * Math.PI) * 0.8;
+    camera.position.lerp(introState.destino.clone().add(new THREE.Vector3(2.6, 2.0, 3.4)), 0.07);
+    camera.lookAt(introState.destino);
+    $('introCaption').querySelector('.capTxt').textContent = 'Escaneando el foco con la cámara térmica…';
+  } else if (t < 9.4) {
+    girarHelices(30);
+    const u = facilitarSuave((t - 7.8) / 1.6);
+    camera.position.lerp(introState.camFinal, 0.09);
+    const miraActual = introState.destino.clone().lerp(introState.targetFinal, u);
+    camera.lookAt(miraActual);
+    anilloEscaneo.material.opacity *= 0.9;
+    $('introCaption').style.opacity = String(1 - u);
+  } else {
+    finalizarIntro();
+  }
+}
+
+/* --------------------------------------------------------------------------------- */
+
 async function main() {
   await cargarDatos();
 
@@ -474,6 +760,12 @@ async function main() {
   controls.maxDistance = WORLD_SIZE * 1.3;
   controls.maxPolarAngle = Math.PI * 0.49;
   controls.update();
+  controls.enabled = false; // se habilita cuando termina la intro del dron
+
+  const camFinalIntro = camera.position.clone();
+  const targetFinalIntro = controls.target.clone();
+  iniciarIntro(null, camFinalIntro, targetFinalIntro);
+  $('btnSkipIntro').addEventListener('click', saltarIntro);
 
   $('btnStereo').addEventListener('click', () => { if (!stereoActivo) activarStereoManual(); });
 
@@ -490,7 +782,9 @@ async function main() {
   renderer.setAnimationLoop(() => {
     const dt = Math.min(0.1, clock.getDelta());
 
-    if (state.playing && !state.modoRiesgo) {
+    if (introState.activo) {
+      actualizarIntro(dt);
+    } else if (state.playing && !state.modoRiesgo) {
       state.acumulador += dt;
       const esc = state.escenarios[state.escenarioActual];
       if (state.acumulador > 1 / state.playSpeed) {
@@ -500,9 +794,10 @@ async function main() {
       }
     }
     actualizarHumo(dt);
+    actualizarNubes(dt);
 
     if (!renderer.xr.isPresenting) {
-      controls.update();
+      if (!introState.activo) controls.update();
       if (stereoActivo) {
         camera.quaternion.copy(quaternionDeOrientacion(orientacion.alpha, orientacion.beta, orientacion.gamma, window.orientation || 0));
         const w = window.innerWidth / 2, h = window.innerHeight;
