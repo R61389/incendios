@@ -38,6 +38,82 @@ const COLOR_EN_LLAMAS = new THREE.Color(0xff6a1a);
 const COLOR_QUEMADA = new THREE.Color(0x2a1812);
 const COLOR_CORTAFUEGOS = new THREE.Color(0x3a3a3a);
 
+/* ------------------- texturas procedurales del terreno -------------------
+ * Sin internet disponible: en vez de imágenes reales, generamos "pasto seco",
+ * "roca" y "tierra" con ruido en un canvas. El shader del terreno las mezcla
+ * según la pendiente y la altura de cada punto (ver aplicarShaderTerreno). */
+function generarTexturaSuelo(tipo) {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(S, S);
+  const paletas = {
+    pasto: [[0xb8, 0x8f, 0x45], [0xd9, 0xb0, 0x5e], [0x8f, 0x72, 0x33]],
+    roca: [[0x6e, 0x68, 0x60], [0x8a, 0x83, 0x79], [0x4a, 0x46, 0x40]],
+    tierra: [[0x6b, 0x4a, 0x2e], [0x8a, 0x61, 0x3c], [0x4a, 0x32, 0x1e]],
+  };
+  const pal = paletas[tipo];
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const n1 = ruidoFBM(x * 0.08, y * 0.08);
+      const n2 = ruidoFBM(x * 0.35 + 50, y * 0.35 + 50);
+      let mezcla = pal[0].map((_, ch) => pal[0][ch] * (1 - n1) + pal[1][ch] * n1);
+      mezcla = mezcla.map((v, ch) => v * (1 - n2 * 0.4) + pal[2][ch] * (n2 * 0.4));
+      const k = (y * S + x) * 4;
+      img.data[k] = mezcla[0]; img.data[k + 1] = mezcla[1]; img.data[k + 2] = mezcla[2]; img.data[k + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function aplicarShaderTerreno(mat, elevMin, elevMax) {
+  const tPasto = generarTexturaSuelo('pasto');
+  const tRoca = generarTexturaSuelo('roca');
+  const tTierra = generarTexturaSuelo('tierra');
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.tPasto = { value: tPasto };
+    shader.uniforms.tRoca = { value: tRoca };
+    shader.uniforms.tTierra = { value: tTierra };
+    shader.uniforms.uElevMin = { value: elevMin };
+    shader.uniforms.uElevMax = { value: elevMax };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vSlope;\nvarying float vAltura;\nvarying vec2 vMiUv;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vAltura = (modelMatrix * vec4(transformed, 1.0)).y;\n  vMiUv = uv;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  vSlope = 1.0 - abs((modelMatrix * vec4(objectNormal, 0.0)).y);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying float vSlope;
+varying float vAltura;
+varying vec2 vMiUv;
+uniform sampler2D tPasto;
+uniform sampler2D tRoca;
+uniform sampler2D tTierra;
+uniform float uElevMin;
+uniform float uElevMax;`)
+      .replace('#include <color_fragment>', `
+  {
+    float rep = 26.0;
+    vec3 bPasto = texture(tPasto, vMiUv * rep).rgb;
+    vec3 bTierra = texture(tTierra, vMiUv * rep * 1.6).rgb;
+    vec3 bRoca = texture(tRoca, vMiUv * rep * 0.9).rgb;
+    float alturaN = clamp((vAltura - uElevMin) / max(0.0001, (uElevMax - uElevMin)), 0.0, 1.0);
+    float factorRoca = smoothstep(0.32, 0.62, vSlope) * 0.85 + smoothstep(0.78, 1.0, alturaN) * 0.6;
+    factorRoca = clamp(factorRoca, 0.0, 1.0);
+    float factorTierra = smoothstep(0.14, 0.34, vSlope) * (1.0 - factorRoca) * 0.8;
+    vec3 base = mix(bPasto, bTierra, factorTierra);
+    base = mix(base, bRoca, factorRoca);
+    diffuseColor.rgb = base;
+  }
+#include <color_fragment>`);
+  };
+  mat.customProgramCacheKey = () => 'terrenoShader';
+}
+
 const WORLD_SIZE = 60;      // tamaño del terreno en unidades Three.js (metros "escénicos")
 const ALTURA_EXAGERA = 1.8; // exageración vertical para que el relieve se note en VR
 
@@ -88,7 +164,9 @@ async function cargarDatos() {
 /* ---------------------- construcción de la escena ------------------- */
 
 let renderer, scene, camera, controls;
-let fireMesh, smokeSystem;
+let fireMesh, smokeSystem, fireParticles;
+let terrainGeo, terrainColorAttr, terrainColorOriginal;
+let lucesIncendio = [];
 let combustibleIdx = []; // [{i,j,x,y,z}]
 let heightAt; // función (i,j)->altura escénica
 
@@ -116,7 +194,8 @@ function crearCieloYLuces() {
   scene.add(new THREE.Mesh(geoCielo, matCielo));
 
   scene.background = new THREE.Color(0xdcb98e);
-  scene.fog = new THREE.FogExp2(0xe4c9a3, 0.0115);
+  // niebla anaranjada-grisácea: simula la calina de humo de un incendio real
+  scene.fog = new THREE.FogExp2(0xcdb196, 0.0135);
 
   const hemi = new THREE.HemisphereLight(0xfff0dd, 0x4a4433, 1.15);
   scene.add(hemi);
@@ -214,10 +293,15 @@ function construirTerreno() {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: 0.92, metalness: 0.02, flatShading: false,
   });
+  aplicarShaderTerreno(mat, 0, (WORLD_SIZE * 0.22) * ALTURA_EXAGERA);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.castShadow = true;
   scene.add(mesh);
+
+  terrainGeo = geo;
+  terrainColorAttr = geo.attributes.color;
+  terrainColorOriginal = colores.slice();
 
   // marcador de viviendas (zona urbana) con un leve relieve para que se note desde VR
   for (let i = 0; i < n; i += 1) {
@@ -237,6 +321,9 @@ function xzDe(i, j) {
 }
 
 function construirOverlayDeFuego() {
+  // InstancedMesh de "columnas" — hoy solo se usa para el mapa de riesgo
+  // (barras 3D de probabilidad). El fuego real se dibuja con partículas
+  // (ver construirFuego) y el terreno quemado se oscurece sobre la marcha.
   const n = state.terreno.n;
   const tileSize = (WORLD_SIZE / n) * 1.02;
   const geo = new THREE.BoxGeometry(tileSize, 1, tileSize);
@@ -246,6 +333,7 @@ function construirOverlayDeFuego() {
   fireMesh = new THREE.InstancedMesh(geo, mat, combustibleIdx.length);
   fireMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   fireMesh.castShadow = false;
+  fireMesh.visible = false;
   const m = new THREE.Matrix4();
   for (let k = 0; k < combustibleIdx.length; k++) {
     m.makeScale(0.0001, 0.0001, 0.0001);
@@ -254,69 +342,149 @@ function construirOverlayDeFuego() {
   scene.add(fireMesh);
 }
 
-/* -------------------------- humo (partículas) ------------------------ */
+/* -------------------- partículas (fuego y humo) con alpha/tamaño por partícula -------------------- */
 
-function texturaHumo() {
+function texturaRadial(stops) {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d');
   const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  g.addColorStop(0, 'rgba(200,200,200,0.55)');
-  g.addColorStop(0.5, 'rgba(160,160,160,0.25)');
-  g.addColorStop(1, 'rgba(160,160,160,0)');
+  for (const [off, col] of stops) g.addColorStop(off, col);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(c);
 }
+const texturaHumo = () => texturaRadial([[0, 'rgba(210,205,195,0.55)'], [0.5, 'rgba(160,155,150,0.25)'], [1, 'rgba(160,155,150,0)']]);
+const texturaFuego = () => texturaRadial([[0, 'rgba(255,245,200,0.95)'], [0.35, 'rgba(255,150,40,0.85)'], [0.7, 'rgba(255,60,20,0.35)'], [1, 'rgba(255,40,10,0)']]);
 
-function construirHumo() {
-  const MAX = 400;
-  const geo = new THREE.BufferGeometry();
-  const positions = new Float32Array(MAX * 3);
-  const alphas = new Float32Array(MAX).fill(0);
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
+/** Material de puntos con alpha y escala POR PARTÍCULA (PointsMaterial normal solo
+ * tiene un size/opacity global; aquí se inyectan dos atributos vía onBeforeCompile). */
+function materialParticulas(map, colorBase, blending) {
   const mat = new THREE.PointsMaterial({
-    size: 2.6, map: texturaHumo(), transparent: true, depthWrite: false,
-    color: 0xcfcfcf, opacity: 0.9, sizeAttenuation: true,
+    size: 1, map, transparent: true, depthWrite: false, sizeAttenuation: true,
+    color: colorBase, blending: blending || THREE.NormalBlending,
   });
-  const points = new THREE.Points(geo, mat);
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aAlpha;\nattribute float aScale;\nvarying float vAlpha;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vAlpha = aAlpha;')
+      .replace('gl_PointSize = size;', 'gl_PointSize = size * aScale;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vAlpha;')
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse, opacity * vAlpha );');
+  };
+  return mat;
+}
+
+function crearPool(max, map, colorBase, blending) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+  geo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(max), 1));
+  geo.setAttribute('aScale', new THREE.BufferAttribute(new Float32Array(max), 1));
+  const points = new THREE.Points(geo, materialParticulas(map, colorBase, blending));
+  points.frustumCulled = false;
   scene.add(points);
-  smokeSystem = {
-    points, geo, max: MAX, next: 0,
-    vel: new Array(MAX).fill(null).map(() => new THREE.Vector3()),
-    life: new Float32Array(MAX),
-    age: new Float32Array(MAX),
+  return {
+    points, geo, max, next: 0,
+    vel: new Array(max).fill(null).map(() => new THREE.Vector3()),
+    life: new Float32Array(max), age: new Float32Array(max),
+    tam0: new Float32Array(max), tam1: new Float32Array(max),
   };
 }
 
-function emitirHumo(x, y, z) {
-  const s = smokeSystem;
-  const k = s.next; s.next = (s.next + 1) % s.max;
-  const pos = s.geo.attributes.position;
-  pos.setXYZ(k, x + (Math.random() - 0.5) * 0.6, y + 0.4, z + (Math.random() - 0.5) * 0.6);
-  s.vel[k].set((Math.random() - 0.5) * 0.15, 0.9 + Math.random() * 0.4, (Math.random() - 0.5) * 0.15 - 0.3);
-  s.life[k] = 2.5 + Math.random() * 1.5;
-  s.age[k] = 0;
+function construirHumo() {
+  smokeSystem = crearPool(500, texturaHumo(), 0xd8d2c8, THREE.NormalBlending);
+  smokeSystem.points.material.size = 3.2;
 }
 
-function actualizarHumo(dt) {
-  const s = smokeSystem;
+function construirFuego() {
+  fireParticles = crearPool(900, texturaFuego(), 0xffaa55, THREE.AdditiveBlending);
+  fireParticles.points.material.size = 1.6;
+}
+
+function emitirEnPool(s, x, y, z, opts) {
+  const k = s.next; s.next = (s.next + 1) % s.max;
   const pos = s.geo.attributes.position;
-  const alpha = s.geo.attributes.alpha;
+  const o = opts;
+  pos.setXYZ(k, x + (Math.random() - 0.5) * o.dx, y + (o.y0 ?? 0), z + (Math.random() - 0.5) * o.dx);
+  s.vel[k].set((Math.random() - 0.5) * o.vxz, o.vy0 + Math.random() * o.vy1, (Math.random() - 0.5) * o.vxz + (o.vzSesgo || 0));
+  s.life[k] = o.life0 + Math.random() * o.life1;
+  s.age[k] = 0;
+  s.tam0[k] = o.tam0; s.tam1[k] = o.tam1;
+  return k;
+}
+
+function emitirHumo(x, y, z, denso) {
+  emitirEnPool(smokeSystem, x, y, z, {
+    dx: 0.6, y0: 0.4, vxz: 0.15, vy0: 0.9, vy1: 0.4, vzSesgo: -0.3,
+    life0: 2.6, life1: 1.6, tam0: 2.2, tam1: denso ? 5.5 : 4.2,
+  });
+}
+
+function emitirFuego(x, y, z) {
+  emitirEnPool(fireParticles, x, y, z, {
+    dx: 0.45, y0: 0.1, vxz: 0.5, vy0: 0.6, vy1: 0.9, vzSesgo: 0,
+    life0: 0.35, life1: 0.35, tam0: 1.6, tam1: 0.3,
+  });
+}
+
+function actualizarPool(s, dt) {
+  const pos = s.geo.attributes.position;
+  const alpha = s.geo.attributes.aAlpha;
+  const escala = s.geo.attributes.aScale;
   for (let k = 0; k < s.max; k++) {
-    if (s.age[k] >= s.life[k]) continue;
+    if (s.age[k] >= s.life[k]) { if (alpha.getX(k) !== 0) alpha.setX(k, 0); continue; }
     s.age[k] += dt;
-    const x = pos.getX(k) + s.vel[k].x * dt;
-    const y = pos.getY(k) + s.vel[k].y * dt;
-    const z = pos.getZ(k) + s.vel[k].z * dt;
-    pos.setXYZ(k, x, y, z);
+    pos.setXYZ(k, pos.getX(k) + s.vel[k].x * dt, pos.getY(k) + s.vel[k].y * dt, pos.getZ(k) + s.vel[k].z * dt);
     const t = s.age[k] / s.life[k];
-    alpha.setX(k, Math.max(0, 1 - t));
-    if (t >= 1) pos.setXYZ(k, 0, -9999, 0);
+    const envolvente = t < 0.15 ? t / 0.15 : 1 - (t - 0.15) / 0.85; // aparece rápido, se apaga gradual
+    alpha.setX(k, Math.max(0, envolvente));
+    escala.setX(k, THREE.MathUtils.lerp(s.tam0[k], s.tam1[k], t));
   }
-  pos.needsUpdate = true;
-  s.points.material.opacity = 0.9;
+  pos.needsUpdate = true; alpha.needsUpdate = true; escala.needsUpdate = true;
+}
+
+function actualizarHumo(dt) { actualizarPool(smokeSystem, dt); }
+function actualizarFuego(dt) { actualizarPool(fireParticles, dt); }
+
+/* ------------------- luces dinámicas del incendio (parpadeo) ------------------- */
+
+function construirLucesIncendio() {
+  for (let i = 0; i < 3; i++) {
+    const luz = new THREE.PointLight(0xff7a2a, 0, 9, 2);
+    scene.add(luz);
+    lucesIncendio.push(luz);
+  }
+}
+
+let relojFuego = 0;
+function actualizarLucesIncendio(dt) {
+  relojFuego += dt;
+  const celdas = state.celdasEnLlamas;
+  if (!celdas || celdas.length === 0) {
+    for (const luz of lucesIncendio) luz.intensity = 0;
+    return;
+  }
+  for (let i = 0; i < lucesIncendio.length; i++) {
+    const c = celdas[Math.floor((i / lucesIncendio.length) * celdas.length) % celdas.length];
+    const luz = lucesIncendio[i];
+    luz.position.set(c.x, c.y + 1.6, c.z);
+    const parpadeo = ruidoFBM(relojFuego * 6 + i * 11, i * 7) ;
+    luz.intensity = 9 + parpadeo * 10;
+  }
+}
+
+/* ------------------ emisión continua de fuego/humo por celda activa ------------------ */
+
+function actualizarEmisionFuego(dt) {
+  const celdas = state.celdasEnLlamas;
+  if (!celdas || celdas.length === 0) return;
+  // más celdas en llamas -> más partículas por segundo, con un tope razonable
+  const porCelda = Math.min(3, 60 / celdas.length);
+  for (const c of celdas) {
+    if (Math.random() < porCelda * dt * 6) emitirFuego(c.x, c.y + 0.15, c.z);
+    if (Math.random() < 0.06) emitirHumo(c.x, c.y + 0.3, c.z, celdas.length > 40);
+  }
 }
 
 /* ------------------------- animación del fuego ------------------------ */
@@ -331,35 +499,33 @@ function colorRiesgo(p) {
 function aplicarFrame() {
   const esc = state.escenarios[state.escenarioActual];
   const frame = esc.frames[Math.min(state.frameIdx, esc.frames.length - 1)];
-  const m = new THREE.Matrix4();
-  const color = new THREE.Color();
   let haQuemadas = 0;
   let llegaBorde = false;
   const n = state.terreno.n;
   const borde = state.terreno.urbano;
+  const color = new THREE.Color();
 
+  state.celdasEnLlamas = [];
   for (let k = 0; k < combustibleIdx.length; k++) {
     const { i, j } = combustibleIdx[k];
     const v = frame[i][j];
-    const [x, z] = xzDe(i, j);
-    const y = heightAt(i, j);
+    const idxVert = i * n + j;
     if (v === 2 || v === 3) {
-      if (v === 2) { color.copy(COLOR_EN_LLAMAS); haQuemadas++; if (Math.random() < 0.02) emitirHumo(x, y + 0.3, z); }
-      else { color.copy(COLOR_QUEMADA); haQuemadas++; }
-      m.compose(
-        new THREE.Vector3(x, y + 0.35, z),
-        new THREE.Quaternion(),
-        new THREE.Vector3(1, 1, 1),
-      );
-      fireMesh.setMatrixAt(k, m);
-      fireMesh.setColorAt(k, color);
+      haQuemadas++;
+      if (v === 2) {
+        const [x, z] = xzDe(i, j);
+        const y = heightAt(i, j);
+        state.celdasEnLlamas.push({ x, y, z });
+      }
+      // terreno "quemado": se oscurece in situ (ceniza), sin cubos superpuestos
+      color.copy(COLOR_QUEMADA);
+      terrainColorAttr.setXYZ(idxVert, color.r, color.g, color.b);
     } else {
-      m.makeScale(0.0001, 0.0001, 0.0001);
-      fireMesh.setMatrixAt(k, m);
+      // restaurar el color original (vegetación/cortafuegos) si no está quemada
+      terrainColorAttr.setXYZ(idxVert, terrainColorOriginal[idxVert * 3], terrainColorOriginal[idxVert * 3 + 1], terrainColorOriginal[idxVert * 3 + 2]);
     }
   }
-  fireMesh.instanceMatrix.needsUpdate = true;
-  if (fireMesh.instanceColor) fireMesh.instanceColor.needsUpdate = true;
+  terrainColorAttr.needsUpdate = true;
 
   // ¿llegó a una celda vecina de zona urbana?
   for (let k = 0; k < combustibleIdx.length && !llegaBorde; k++) {
@@ -388,7 +554,9 @@ function aplicarFrame() {
 
 function aplicarMapaDeRiesgo(activar) {
   state.modoRiesgo = activar;
+  fireMesh.visible = activar;
   if (!activar) { aplicarFrame(); return; }
+  state.celdasEnLlamas = [];
   // Mapa de riesgo real: probabilidad de quema por celda, de 150 corridas de
   // Monte Carlo (mismo criterio que la Figura 8 del informe, cap. 6.1).
   const mapa = state.riesgo.mapa;
@@ -628,7 +796,7 @@ function construirDron() {
     helices.push(helice);
   }
   drone.scale.setScalar(1.7);
-  drone.castShadow = true;
+  drone.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
   scene.add(drone);
 
   // anillo de "escaneo térmico" que se usa al llegar a destino
@@ -783,6 +951,8 @@ async function main() {
   construirTerreno();
   construirOverlayDeFuego();
   construirHumo();
+  construirFuego();
+  construirLucesIncendio();
   wireUI();
   setupVR();
   poblarBrujula();
@@ -833,7 +1003,12 @@ async function main() {
       }
     }
     actualizarHumo(dt);
+    actualizarFuego(dt);
     actualizarNubes(dt);
+    if (!introState.activo && !state.modoRiesgo) {
+      actualizarEmisionFuego(dt);
+      actualizarLucesIncendio(dt);
+    }
 
     if (!renderer.xr.isPresenting) {
       if (!introState.activo) controls.update();
