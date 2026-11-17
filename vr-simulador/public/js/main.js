@@ -927,6 +927,7 @@ function aplicarFrame() {
   $('statLlega').classList.toggle('on', llegaBorde);
   $('statTiempo').textContent = `${String(minutos).padStart(2, '0')} MIN`;
   $('statDuracion').textContent = formatearDuracion(minutosTotales);
+  actualizarLlegadaBomberos(minutos);
   const celdaHa = state.terreno.celda_m ** 2 / 10000;
   const pctArborea = totalPorClase[10] ? (porClase[10] / totalPorClase[10]) * 100 : 0;
   $('statArborea').textContent = `${porClase[10]} CELDAS (${(porClase[10] * celdaHa).toFixed(1)} HA) · ${pctArborea.toFixed(0)}%`;
@@ -981,6 +982,8 @@ function aplicarMapaDeRiesgo(activar) {
   $('statDuracion').textContent = '—';
   $('statArborea').textContent = '—';
   $('statOtraVeg').textContent = '—';
+  $('statBomberos').textContent = '—';
+  $('statBomberos').classList.remove('llego');
 }
 
 function formatearDuracion(minutosTotales) {
@@ -1784,10 +1787,43 @@ function reiniciarEstructuras() {
   }
 }
 
+// --- tiempo de respuesta real de los bomberos ---
+// Unidad de Bomberos de la Policía Boliviana, Av. Circuito Bolivia (orilla de
+// la laguna Alalay, Cochabamba) — coordenada aprox. de la laguna: 17°24'22"S
+// 66°08'23"O (Wikipedia). Punto de ignición real del escenario: -17.337328,
+// -66.166642 (grilla_sector_cercado.csv, celda de ignición). Distancia en
+// línea recta: 8.1 km. SUPUESTO declarado (no hay ruta real disponible, igual
+// criterio que rendimiento_m_h/s_salto en parametros_modelo.csv): factor vial
+// ×1.35 (≈11 km por calle) y velocidad promedio de 30 km/h (mezcla de tránsito
+// urbano + camino de montaña) → tiempo de respuesta ≈ 22 minutos.
+const BOMBEROS_DISTANCIA_KM = 11.0;
+const BOMBEROS_TIEMPO_MIN = 22;
+let camionEntrada = null;
+
 function construirEstructurasReales() {
   colocarEstructura(modeloVivienda, 74, 35, 1.5, 25, 2.5);
   colocarEstructura(modeloAvicola, 78, 40, 2.3, -20, 2.5);
-  colocarEstructura(modeloCamion, 82, 40, 1.05, 160, 0); // el camión no se "quema": llega a apoyar
+  camionEntrada = colocarEstructura(modeloCamion, 82, 40, 1.05, 160, 0); // no se "quema": llega a apoyar
+  if (camionEntrada) {
+    camionEntrada.posFinal = camionEntrada.obj.position.clone();
+    camionEntrada.posInicial = camionEntrada.posFinal.clone().add(new THREE.Vector3(-5, 0, 17));
+    camionEntrada.obj.position.copy(camionEntrada.posInicial);
+  }
+}
+
+// Llamado desde aplicarFrame() con los minutos ya transcurridos del escenario
+// activo: mueve el camión desde fuera del mapa (viniendo "de la ciudad")
+// hasta su lugar real, en el tiempo real calculado arriba — no es un
+// adorno, usa el mismo reloj que el resto de la telemetría.
+function actualizarLlegadaBomberos(minutos) {
+  if (!camionEntrada) return;
+  const fraccion = Math.min(1, Math.max(0, minutos / BOMBEROS_TIEMPO_MIN));
+  camionEntrada.obj.position.lerpVectors(camionEntrada.posInicial, camionEntrada.posFinal, fraccion);
+  const llego = fraccion >= 1;
+  $('statBomberos').textContent = llego
+    ? 'EN EL LUGAR'
+    : `EN CAMINO — ${Math.max(0, Math.ceil(BOMBEROS_TIEMPO_MIN - minutos))} MIN`;
+  $('statBomberos').classList.toggle('llego', llego);
 }
 
 // Se llama desde aplicarFrame() por cada celda en llamas (v===2); si cae

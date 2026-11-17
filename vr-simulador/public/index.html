@@ -143,6 +143,7 @@
   #stats .label { color: var(--text-dim); letter-spacing: .02em; }
   #stats .val { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
   #stats .val.on { color: var(--red); }
+  #stats .val.llego { color: var(--green); }
   #stats.visible { opacity: 1; transform: none; }
 
   /* ---------- controles inferiores ---------- */
@@ -453,6 +454,7 @@
   <div class="row"><span class="label">DURACIÓN TOTAL</span><span class="val" id="statDuracion">—</span></div>
   <div class="row"><span class="label">VEG. ARBÓREA</span><span class="val" id="statArborea">—</span></div>
   <div class="row"><span class="label">OTRA VEG.</span><span class="val" id="statOtraVeg">—</span></div>
+  <div class="row"><span class="label">BOMBEROS</span><span class="val" id="statBomberos">—</span></div>
 </div>
 
 <div id="hud">
@@ -504,6 +506,7 @@
       <div><b>Mapa de riesgo:</b> 150 corridas Monte Carlo del mismo autómata, con focos_firms_tunari_2020_2025.csv para elegir puntos de ignición realistas.</div>
       <div><b>Modo interactivo:</b> corre el mismo autómata y los mismos coeficientes calibrados (p_h, a, c1, c2, vegetación) directamente en tu navegador (js/automata.js), pero con el viento/humedad que elijas y el cortafuegos que dibujes — es una simulación propia tuya, no una corrida validada contra el incendio real. La humedad no estaba en el modelo original de Alexandridis et al.; se agregó un factor simple y declarado para que el control tenga efecto (ver comentario en automata.js).</div>
       <div><b>Vegetación quemada por tipo:</b> columna clase_esa (10 arbórea, 20 matorral, 30 pastizal, 40 cultivo). El CSV no trae número de plantas individuales, solo tipo y densidad cualitativa por celda de 25×25 m — por eso se muestra en celdas/hectáreas, no en "plantas".</div>
+      <div><b>Tiempo de respuesta de bomberos:</b> Unidad de Bomberos de la Policía Boliviana, Av. Circuito Bolivia (orilla de la laguna Alalay, Cochabamba) hasta el punto de ignición real — 8,1 km en línea recta. SUPUESTO declarado (no hay ruta real disponible): factor vial ×1,35 (≈11 km por calle) y 30 km/h promedio (tránsito urbano + camino de montaña) → ≈22 min. El camión viaja ese tiempo real dentro de la simulación, venga del escenario que venga.</div>
     </div>
   </div>
   <div id="timeline" class="tpanel">
