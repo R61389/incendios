@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /* ------------------------------------------------------------------ *
  *  Simulador VR de incendios — Parque Nacional Tunari, sector Cercado
@@ -71,7 +72,32 @@ function generarTexturaSuelo(tipo) {
   return tex;
 }
 
+/** Textura de relieve (bump) en escala de grises, a mayor frecuencia que el
+ * color, para que la luz "lea" piedritas/terrones aunque el color sea plano. */
+function generarTexturaRelieve() {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const n = ruidoFBM(x * 0.55, y * 0.55) * 0.7 + ruidoFBM(x * 1.4 + 90, y * 1.4 + 90) * 0.3;
+      const v = Math.round(n * 255);
+      const k = (y * S + x) * 4;
+      img.data[k] = v; img.data[k + 1] = v; img.data[k + 2] = v; img.data[k + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(26, 26);
+  return tex;
+}
+
 function aplicarShaderTerreno(mat, elevMin, elevMax) {
+  mat.bumpMap = generarTexturaRelieve();
+  mat.bumpScale = 0.045;
   const tPasto = generarTexturaSuelo('pasto');
   const tRoca = generarTexturaSuelo('roca');
   const tTierra = generarTexturaSuelo('tierra');
@@ -152,6 +178,7 @@ async function cargarDatos() {
     fetch('./data/fuego_base.json').then((r) => r.json()),
     fetch('./data/fuego_cortafuegos250.json').then((r) => r.json()),
     fetch('./data/riesgo.json').then((r) => r.json()),
+    cargarModeloDron(),
   ]);
   state.terreno = terreno;
   state.escenarios.base = base;
@@ -159,6 +186,19 @@ async function cargarDatos() {
   state.riesgo = riesgo;
   clearInterval(bootTimer);
   if (bootEl) bootEl.textContent = 'SISTEMA LISTO.';
+}
+
+/* -------------------------- modelo 3D real del dron -------------------------- */
+let droneModeloGLTF = null;
+function cargarModeloDron() {
+  return new Promise((resolve) => {
+    new GLTFLoader().load(
+      './models/dron.glb',
+      (gltf) => { droneModeloGLTF = gltf.scene; resolve(); },
+      undefined,
+      (err) => { console.warn('No se pudo cargar el modelo del dron, se usa el procedural:', err); resolve(); },
+    );
+  });
 }
 
 /* ---------------------- construcción de la escena ------------------- */
@@ -488,33 +528,83 @@ function texturaRadial(stops) {
   return new THREE.CanvasTexture(c);
 }
 const texturaHumo = () => texturaRadial([[0, 'rgba(210,205,195,0.55)'], [0.5, 'rgba(160,155,150,0.25)'], [1, 'rgba(160,155,150,0)']]);
-const texturaFuego = () => texturaRadial([[0, 'rgba(255,245,200,0.95)'], [0.35, 'rgba(255,150,40,0.85)'], [0.7, 'rgba(255,60,20,0.35)'], [1, 'rgba(255,40,10,0)']]);
 
-/** Material de puntos con alpha y escala POR PARTÍCULA (PointsMaterial normal solo
- * tiene un size/opacity global; aquí se inyectan dos atributos vía onBeforeCompile). */
-function materialParticulas(map, colorBase, blending) {
+/** Textura de una llama de verdad (silueta de gota con el borde ondulado),
+ * no una mancha circular: así cada partícula ya "parece" fuego por sí sola. */
+function texturaFuego() {
+  const S = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.translate(S / 2, S / 2);
+  const puntos = [];
+  const N = 24;
+  for (let i = 0; i <= N; i++) {
+    const t = i / N; // 0 = base, 1 = vuelta a la base por el otro lado
+    const ang = t * Math.PI * 2 - Math.PI / 2; // empieza arriba
+    const alt = Math.sin(t * Math.PI); // 0 en los extremos, 1 a la mitad del contorno
+    let radio;
+    if (t < 0.5) radio = 1 - alt * 0.15; // lado derecho, con pequeñas ondas
+    else radio = 1 - alt * 0.35;
+    radio *= 0.9 + 0.08 * Math.sin(t * Math.PI * 6);
+    const puntiagudo = Math.pow(Math.max(0, Math.sin((t) * Math.PI)), 0.4);
+    const y = -Math.cos(t * Math.PI * 2) * S * 0.46 * (0.55 + 0.45 * puntiagudo);
+    const x = Math.sin(t * Math.PI * 2) * S * 0.30 * radio;
+    puntos.push([x, y]);
+  }
+  ctx.beginPath();
+  ctx.moveTo(puntos[0][0], puntos[0][1]);
+  for (const [x, y] of puntos) ctx.lineTo(x, y);
+  ctx.closePath();
+  const g = ctx.createRadialGradient(0, S * 0.08, 0, 0, 0, S * 0.5);
+  g.addColorStop(0, 'rgba(255,250,215,0.98)');
+  g.addColorStop(0.32, 'rgba(255,195,70,0.95)');
+  g.addColorStop(0.62, 'rgba(255,110,30,0.75)');
+  g.addColorStop(1, 'rgba(255,40,10,0)');
+  ctx.fillStyle = g;
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  return tex;
+}
+
+/** Material de puntos con alpha, escala y ROTACIÓN por partícula (PointsMaterial
+ * normal solo tiene size/opacity global; se inyectan 3 atributos vía onBeforeCompile). */
+function materialParticulas(map, colorBase, blending, conRotacion) {
   const mat = new THREE.PointsMaterial({
     size: 1, map, transparent: true, depthWrite: false, sizeAttenuation: true,
     color: colorBase, blending: blending || THREE.NormalBlending,
   });
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aAlpha;\nattribute float aScale;\nvarying float vAlpha;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vAlpha = aAlpha;')
+      .replace('#include <common>', '#include <common>\nattribute float aAlpha;\nattribute float aScale;\nattribute float aRot;\nvarying float vAlpha;\nvarying float vRot;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vAlpha = aAlpha;\n  vRot = aRot;')
       .replace('gl_PointSize = size;', 'gl_PointSize = size * aScale;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vAlpha;')
+      .replace('#include <common>', '#include <common>\nvarying float vAlpha;\nvarying float vRot;')
       .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse, opacity * vAlpha );');
+    if (conRotacion) {
+      // Rota gl_PointCoord alrededor del centro antes de muestrear la textura,
+      // así cada partícula de llama mira en una dirección distinta (más natural
+      // que tener todas las llamas "mirando" exactamente igual).
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'vec2 uv = ( uvTransform * vec3( gl_PointCoord.x, 1.0 - gl_PointCoord.y, 1 ) ).xy;',
+        `vec2 pc = vec2( gl_PointCoord.x, 1.0 - gl_PointCoord.y ) - 0.5;
+    float s = sin(vRot), cc = cos(vRot);
+    pc = mat2(cc, -s, s, cc) * pc;
+    vec2 uv = ( uvTransform * vec3( pc + 0.5, 1 ) ).xy;`,
+      );
+    }
   };
   return mat;
 }
 
-function crearPool(max, map, colorBase, blending) {
+function crearPool(max, map, colorBase, blending, conRotacion) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
   geo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(max), 1));
   geo.setAttribute('aScale', new THREE.BufferAttribute(new Float32Array(max), 1));
-  const points = new THREE.Points(geo, materialParticulas(map, colorBase, blending));
+  geo.setAttribute('aRot', new THREE.BufferAttribute(new Float32Array(max), 1));
+  const points = new THREE.Points(geo, materialParticulas(map, colorBase, blending, conRotacion));
   points.frustumCulled = false;
   scene.add(points);
   return {
@@ -531,7 +621,7 @@ function construirHumo() {
 }
 
 function construirFuego() {
-  fireParticles = crearPool(900, texturaFuego(), 0xffaa55, THREE.AdditiveBlending);
+  fireParticles = crearPool(900, texturaFuego(), 0xffaa55, THREE.AdditiveBlending, true);
   fireParticles.points.material.size = 1.6;
 }
 
@@ -544,6 +634,7 @@ function emitirEnPool(s, x, y, z, opts) {
   s.life[k] = o.life0 + Math.random() * o.life1;
   s.age[k] = 0;
   s.tam0[k] = o.tam0; s.tam1[k] = o.tam1;
+  if (s.geo.attributes.aRot) s.geo.attributes.aRot.setX(k, Math.random() * Math.PI * 2);
   return k;
 }
 
@@ -575,6 +666,7 @@ function actualizarPool(s, dt) {
     escala.setX(k, THREE.MathUtils.lerp(s.tam0[k], s.tam1[k], t));
   }
   pos.needsUpdate = true; alpha.needsUpdate = true; escala.needsUpdate = true;
+  if (s.geo.attributes.aRot) s.geo.attributes.aRot.needsUpdate = true;
 }
 
 function actualizarHumo(dt) { actualizarPool(smokeSystem, dt); }
@@ -893,8 +985,7 @@ function encontrarPadCercaDeUrbano() {
   return mejor;
 }
 
-function construirDron() {
-  drone = new THREE.Group();
+function construirDronProcedural() {
   const matCuerpo = new THREE.MeshStandardMaterial({ color: 0x24282c, roughness: 0.4, metalness: 0.55 });
   const matCuerpoClaro = new THREE.MeshStandardMaterial({ color: 0x3a4046, roughness: 0.3, metalness: 0.6 });
   const matHelice = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3, metalness: 0.2, transparent: true, opacity: 0.92 });
@@ -924,15 +1015,6 @@ function construirDron() {
   lenteTermico.position.set(0, -0.18, 0.18);
   lenteTermico.rotation.x = -Math.PI / 2.3;
   drone.add(lenteTermico);
-
-  // luces de navegación: blanca al frente, roja atrás (convención real de aviación)
-  const luzFrontal = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  luzFrontal.position.set(0, 0.03, 0.28);
-  drone.add(luzFrontal);
-  const luz = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff2b2b }));
-  luz.position.set(0, 0.07, -0.27);
-  drone.add(luz);
-  drone.userData.luz = luz;
 
   const esquinas = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
   for (const [sx, sz] of esquinas) {
@@ -968,6 +1050,45 @@ function construirDron() {
     drone.add(grupoHelice);
     helices.push(grupoHelice);
   }
+}
+
+function construirDron() {
+  drone = new THREE.Group();
+
+  if (droneModeloGLTF) {
+    // Modelo real (Meshy AI "Night Flyer", .glb) — un solo mesh, sin hélices
+    // separadas para animar, así que "helices" queda vacío a propósito.
+    const modelo = droneModeloGLTF.clone(true);
+    modelo.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        if (o.material) { o.material = o.material.clone(); o.material.roughness = 0.5; o.material.metalness = 0.25; }
+      }
+    });
+    const caja = new THREE.Box3().setFromObject(modelo);
+    const tam = new THREE.Vector3(); caja.getSize(tam);
+    const centro = new THREE.Vector3(); caja.getCenter(centro);
+    const anchoDeseado = 0.95; // unidades de la escena, antes del drone.scale.setScalar(1.7)
+    const escalaModelo = anchoDeseado / Math.max(tam.x, tam.z);
+    modelo.position.sub(centro);
+    const contenedor = new THREE.Group();
+    contenedor.add(modelo);
+    contenedor.scale.setScalar(escalaModelo);
+    contenedor.position.y = (tam.y * escalaModelo) / 2;
+    drone.add(contenedor);
+  } else {
+    construirDronProcedural();
+  }
+
+  // luces de navegación: blanca al frente, roja atrás (convención real de aviación)
+  const luzFrontal = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  luzFrontal.position.set(0, 0.05, 0.3);
+  drone.add(luzFrontal);
+  const luz = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff2b2b }));
+  luz.position.set(0, 0.07, -0.3);
+  drone.add(luz);
+  drone.userData.luz = luz;
+
   drone.scale.setScalar(1.7);
   drone.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
   scene.add(drone);
