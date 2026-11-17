@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Simulador VR · Incendios Tunari</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0a0f14; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; touch-action: none; }
+
+  #hud {
+    position: fixed; left: 0; right: 0; top: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center;
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif; color: #eef3f6;
+    pointer-events: none;
+  }
+  #hud .bar {
+    pointer-events: auto;
+    margin-top: 10px;
+    background: rgba(10, 14, 20, 0.72);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+  }
+  #title { font-size: 13px; letter-spacing: .04em; opacity: .85; text-transform: uppercase; margin-top: 8px;}
+  #title b { color: #ff8a4c; }
+
+  button.ui {
+    font-family: inherit; font-size: 14px; font-weight: 600;
+    color: #eef3f6; background: #1b242c; border: 1px solid rgba(255,255,255,0.12);
+    padding: 9px 14px; border-radius: 10px; cursor: pointer;
+    transition: transform .12s ease, background .12s ease;
+  }
+  button.ui:active { transform: scale(0.96); }
+  button.ui.active { background: #d9541f; border-color: #ff8a4c; }
+  button.ui.vr { background: #1f3a2e; border-color: #4caf50; }
+
+  #timeline { display: flex; align-items: center; gap: 10px; width: min(560px, 86vw); pointer-events: auto; }
+  #timeline input[type=range] { flex: 1; accent-color: #ff6a2c; }
+  #timeClock { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 58px; text-align: right; opacity: .9; }
+
+  #stats {
+    position: fixed; right: 12px; bottom: 12px; z-index: 10;
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif; color: #eef3f6;
+    background: rgba(10,14,20,0.72); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 10px 14px; font-size: 13px; min-width: 200px;
+    backdrop-filter: blur(6px);
+  }
+  #stats .row { display: flex; justify-content: space-between; gap: 14px; }
+  #stats .label { opacity: .7; }
+  #stats .val { font-weight: 700; }
+  #stats .val.on { color: #ff8a4c; }
+
+  #loading {
+    position: fixed; inset: 0; z-index: 50; background: #0a0f14;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #eef3f6; font-family: 'Segoe UI', Roboto, Arial, sans-serif; text-align: center; gap: 14px;
+  }
+  #loading .spinner {
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.15); border-top-color: #ff6a2c;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #fallbackNotice {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    z-index: 10; font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    color: #ffd7b0; background: rgba(90, 40, 10, .55); border: 1px solid rgba(255,138,76,.4);
+    padding: 6px 12px; border-radius: 10px; font-size: 12px; display: none; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div>Cargando el terreno real del sector Cercado…</div>
+  </div>
+
+  <div id="app"></div>
+
+  <div id="hud">
+    <div class="bar">
+      <button class="ui active" id="btnBase">Escenario actual</button>
+      <button class="ui" id="btnCortafuegos">+ Cortafuegos 250 m</button>
+      <button class="ui" id="btnRiesgo">Mapa de riesgo</button>
+    </div>
+    <div class="bar" id="timeline">
+      <button class="ui" id="btnPlay">▶</button>
+      <input type="range" id="scrub" min="0" max="100" value="0" />
+      <span id="timeClock">00:00</span>
+    </div>
+    <div class="bar">
+      <button class="ui vr" id="btnVR">Entrar en VR 🥽</button>
+      <button class="ui" id="btnStereo">Modo Cardboard manual</button>
+    </div>
+    <div id="title">Parque Nacional Tunari · Sector Cercado · <b>SIM-522 · Grupo 3</b></div>
+  </div>
+
+  <div id="stats">
+    <div class="row"><span class="label">Escenario</span><span class="val" id="statEscenario">Base</span></div>
+    <div class="row"><span class="label">Hectáreas quemadas</span><span class="val" id="statHa">0.0 ha</span></div>
+    <div class="row"><span class="label">¿Llega a viviendas?</span><span class="val" id="statLlega">—</span></div>
+    <div class="row"><span class="label">Tiempo simulado</span><span class="val" id="statTiempo">0 min</span></div>
+  </div>
+
+  <div id="fallbackNotice">Modo Cardboard manual activo — mueve el celular para mirar alrededor. Toca para salir.</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./libs/three/build/three.module.js",
+      "three/addons/": "./libs/three/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
