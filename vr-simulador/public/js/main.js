@@ -425,12 +425,15 @@ function wireUI() {
     $('btnRiesgo').classList.toggle('active', activar);
     aplicarMapaDeRiesgo(activar);
   });
+  const setIconoPlay = (reproduciendo) => {
+    $('iconPlay').querySelector('use').setAttribute('href', reproduciendo ? '#i-pause' : '#i-play');
+  };
   $('btnPlay').addEventListener('click', () => {
     state.playing = !state.playing;
-    $('btnPlay').querySelector('.ic').textContent = state.playing ? '⏸' : '▶';
+    setIconoPlay(state.playing);
   });
   $('scrub').addEventListener('input', (e) => {
-    state.playing = false; $('btnPlay').querySelector('.ic').textContent = '▶';
+    state.playing = false; setIconoPlay(false);
     state.frameIdx = Number(e.target.value);
     aplicarFrame();
   });
@@ -439,6 +442,12 @@ function wireUI() {
 /* --------------------------- VR / Cardboard ---------------------------- */
 
 let xrSession = null;
+
+function setTextoVR(texto) {
+  const span = $('btnVR').querySelector('span');
+  if (span) span.textContent = texto; else $('btnVR').textContent = texto;
+  $('btnVR').title = texto;
+}
 
 async function entrarEnVR() {
   if (!navigator.xr) return;
@@ -449,14 +458,14 @@ async function entrarEnVR() {
     xrSession = session;
     renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
-    $('btnVR').textContent = 'Salir de VR';
+    setTextoVR('Salir de VR');
     session.addEventListener('end', () => {
       xrSession = null;
-      $('btnVR').textContent = 'Entrar en VR 🥽';
+      setTextoVR('Entrar en VR');
     });
   } catch (err) {
     console.error('No se pudo iniciar la sesión VR:', err);
-    $('btnVR').textContent = 'VR no disponible';
+    setTextoVR('VR no disponible');
     $('btnVR').disabled = true;
   }
 }
@@ -464,12 +473,12 @@ async function entrarEnVR() {
 function setupVR() {
   renderer.xr.enabled = true;
   if (!navigator.xr) {
-    $('btnVR').textContent = 'WebXR no disponible — usa Cardboard manual';
+    setTextoVR('Usa Cardboard manual');
     $('btnVR').disabled = true;
     return;
   }
   navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
-    if (!ok) { $('btnVR').textContent = 'VR no disponible en este navegador'; $('btnVR').disabled = true; }
+    if (!ok) { setTextoVR('VR no disponible aquí'); $('btnVR').disabled = true; }
   });
   $('btnVR').addEventListener('click', () => {
     if (xrSession) xrSession.end(); else entrarEnVR();
