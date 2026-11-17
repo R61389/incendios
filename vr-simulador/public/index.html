@@ -438,7 +438,8 @@
     </button>
     <div class="vSub">
       <div><b>Terreno / elevación / vegetación:</b> grilla_sector_cercado.csv (columnas elevacion_m, clase_esa, densidad_ajuste) — las mismas 10.000 celdas del informe.</div>
-      <div><b>Incendio (ambos escenarios):</b> autómata celular calibrado, p_h = 0.072 (parametros_modelo.csv, recalibrado en la sección 5.5 del informe).</div>
+      <div><b>Incendio real de calibración:</b> el del 12/08/2026 en Cercado, Parque Nacional Tunari — ~43 ha quemadas entre 15:10 y 18:30 (~200 min), destruyó 2 cabañas, una granja avícola y colmenas. p_h = 0.072 se ajustó por bisección para que el autómata reproduzca esas 43 ha a los 200 min (parametros_modelo.csv, informe sección 10).</div>
+      <div><b>Escenarios mostrados aquí:</b> usan el mismo autómata ya calibrado, pero con viento del "peor día" (percentil 95 de ráfagas de la época seca) en vez del viento real y suave de esa tarde (2.09 m/s desde 269°) — para mostrar el caso más exigente, no para repetir ese incendio tal cual.</div>
       <div><b>Cortafuegos 250m:</b> franja real a 250 m del borde urbano (clase_esa = 50 + distancia).</div>
       <div><b>Viento / clima:</b> meteo_tunari_epoca_seca_2023_2026.csv — percentil 95 de wind_gusts_10m ("peor día"); humedad y temperatura del registro real más cercano a ese percentil.</div>
       <div><b>Mapa de riesgo:</b> 150 corridas Monte Carlo del mismo autómata, con focos_firms_tunari_2020_2025.csv para elegir puntos de ignición realistas.</div>

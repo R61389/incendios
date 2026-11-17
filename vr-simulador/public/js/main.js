@@ -1168,6 +1168,10 @@ function poblarBrujula() {
   }
 }
 
+function setIconoPlay(reproduciendo) {
+  $('iconPlay').querySelector('use').setAttribute('href', reproduciendo ? '#i-pause' : '#i-play');
+}
+
 function wireUI() {
   $('veredictoToggle').addEventListener('click', () => {
     $('veredicto').classList.toggle('expanded');
@@ -1200,9 +1204,6 @@ function wireUI() {
     }
     aplicarMapaDeRiesgo(activar);
   });
-  const setIconoPlay = (reproduciendo) => {
-    $('iconPlay').querySelector('use').setAttribute('href', reproduciendo ? '#i-pause' : '#i-play');
-  };
   $('btnPlay').addEventListener('click', () => {
     state.playing = !state.playing;
     setIconoPlay(state.playing);
@@ -1736,8 +1737,15 @@ async function main() {
       const esc = state.escenarios[state.escenarioActual];
       if (state.acumulador > 1 / state.playSpeed) {
         state.acumulador = 0;
-        state.frameIdx = (state.frameIdx + 1) % esc.frames.length;
-        aplicarFrame();
+        if (state.frameIdx < esc.frames.length - 1) {
+          // avanza un frame; al llegar al final el incendio se queda
+          // "apagado/consumido" ahí — no vuelve a reiniciarse desde cero
+          state.frameIdx++;
+          aplicarFrame();
+        } else {
+          state.playing = false;
+          setIconoPlay(false);
+        }
       }
     }
     actualizarHumo(dt);
