@@ -313,6 +313,139 @@ function construirTerreno() {
   }
 }
 
+/* ------------------------- vegetación real (árboles y pasto) ------------------------- */
+
+let arbolMesh, troncoMesh, pastoMesh;
+let vegArbolAt, vegPastoAt; // por índice de combustibleIdx: nº de instancia, o -1
+let arbolMatOrig = [], pastoMatOrig = []; // para restaurar al retroceder la línea de tiempo
+const MAT_CERO = new THREE.Matrix4().makeScale(0, 0, 0);
+
+function texturaHoja() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 32, 32);
+  ctx.fillStyle = '#000';
+  for (const [x1, x2] of [[6, 10], [14, 18], [22, 26]]) {
+    ctx.beginPath();
+    ctx.moveTo(x1, 32); ctx.quadraticCurveTo((x1 + x2) / 2, 10, x2, 2);
+    ctx.quadraticCurveTo((x1 + x2) / 2, 18, x1, 32);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  return tex;
+}
+
+function construirVegetacion() {
+  const t = state.terreno;
+  const n = t.n;
+  vegArbolAt = new Int32Array(combustibleIdx.length).fill(-1);
+  vegPastoAt = new Int32Array(combustibleIdx.length).fill(-1);
+
+  // --- árboles: copa (cono) + tronco, uno por celda arbórea (con algo de salteo) ---
+  const idxArboles = [];
+  for (let k = 0; k < combustibleIdx.length; k++) {
+    const { i, j } = combustibleIdx[k];
+    if (t.clase[i][j] === 10 && !t.lineaCortafuegos250[i][j] && Math.random() < 0.92) idxArboles.push(k);
+  }
+  const copaGeo = new THREE.ConeGeometry(0.42, 1.5, 6);
+  copaGeo.translate(0, 0.75, 0);
+  const copaMat = new THREE.MeshStandardMaterial({ color: 0x2f4f2a, roughness: 0.95 });
+  arbolMesh = new THREE.InstancedMesh(copaGeo, copaMat, idxArboles.length);
+  arbolMesh.castShadow = true; arbolMesh.receiveShadow = true;
+  arbolMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  const troncoGeo = new THREE.CylinderGeometry(0.075, 0.1, 0.55, 5);
+  troncoGeo.translate(0, 0.28, 0);
+  const troncoMat = new THREE.MeshStandardMaterial({ color: 0x4a3524, roughness: 1 });
+  troncoMesh = new THREE.InstancedMesh(troncoGeo, troncoMat, idxArboles.length);
+  troncoMesh.castShadow = true;
+  troncoMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+  const m = new THREE.Matrix4(); const q = new THREE.Quaternion(); const col = new THREE.Color();
+  const colorArbol = [0x2f4f2a, 0x3a5e32, 0x27431f];
+  for (let a = 0; a < idxArboles.length; a++) {
+    const k = idxArboles[a]; vegArbolAt[k] = a;
+    const { i, j } = combustibleIdx[k];
+    const [cx, cz] = xzDe(i, j);
+    const jitter = (WORLD_SIZE / n) * 0.8;
+    const x = cx + (Math.random() - 0.5) * jitter, z = cz + (Math.random() - 0.5) * jitter;
+    const y = heightAt(i, j);
+    const esc = 0.8 + Math.random() * 0.8;
+    q.setFromEuler(new THREE.Euler(0, Math.random() * Math.PI * 2, 0));
+    m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(esc, esc * (0.9 + Math.random() * 0.4), esc));
+    arbolMesh.setMatrixAt(a, m); troncoMesh.setMatrixAt(a, m); arbolMatOrig[a] = m.clone();
+    col.set(colorArbol[a % colorArbol.length]);
+    arbolMesh.setColorAt(a, col);
+  }
+  arbolMesh.instanceMatrix.needsUpdate = true; troncoMesh.instanceMatrix.needsUpdate = true;
+  scene.add(arbolMesh); scene.add(troncoMesh);
+
+  // --- pasto/matorral: mata cruzada (2 planos en X) por celda, con textura de hojas ---
+  const idxPasto = [];
+  for (let k = 0; k < combustibleIdx.length; k++) {
+    const { i, j } = combustibleIdx[k];
+    const c = t.clase[i][j];
+    if ((c === 20 || c === 30 || c === 40) && !t.lineaCortafuegos250[i][j] && Math.random() < 0.55) idxPasto.push(k);
+  }
+  const p1 = new THREE.PlaneGeometry(0.55, 0.42); p1.translate(0, 0.21, 0);
+  const p2 = p1.clone(); p2.rotateY(Math.PI / 2);
+  const posArr = new Float32Array((p1.attributes.position.count + p2.attributes.position.count) * 3);
+  const uvArr = new Float32Array((p1.attributes.uv.count + p2.attributes.uv.count) * 2);
+  posArr.set(p1.attributes.position.array, 0); posArr.set(p2.attributes.position.array, p1.attributes.position.array.length);
+  uvArr.set(p1.attributes.uv.array, 0); uvArr.set(p2.attributes.uv.array, p1.attributes.uv.array.length);
+  const idxArr = new Uint16Array([...p1.index.array, ...p2.index.array.map((v) => v + p1.attributes.position.count)]);
+  const pastoGeo = new THREE.BufferGeometry();
+  pastoGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  pastoGeo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+  pastoGeo.setIndex(new THREE.BufferAttribute(idxArr, 1));
+  pastoGeo.computeVertexNormals();
+  const pastoMat = new THREE.MeshStandardMaterial({
+    map: texturaHoja(), alphaTest: 0.4, side: THREE.DoubleSide, roughness: 1, vertexColors: true,
+  });
+  pastoMesh = new THREE.InstancedMesh(pastoGeo, pastoMat, idxPasto.length);
+  pastoMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  pastoMesh.castShadow = false; pastoMesh.receiveShadow = true;
+  const colorPasto = { 20: [0x7c8f3d, 0x6c7f34], 30: [0xb89248, 0xc6a052], 40: [0x9b7640, 0xad8550] };
+  for (let a = 0; a < idxPasto.length; a++) {
+    const k = idxPasto[a]; vegPastoAt[k] = a;
+    const { i, j } = combustibleIdx[k];
+    const c = t.clase[i][j];
+    const [cx, cz] = xzDe(i, j);
+    const jitter = (WORLD_SIZE / n) * 0.85;
+    const x = cx + (Math.random() - 0.5) * jitter, z = cz + (Math.random() - 0.5) * jitter;
+    const y = heightAt(i, j);
+    const esc = 0.7 + Math.random() * 0.7;
+    q.setFromEuler(new THREE.Euler(0, Math.random() * Math.PI * 2, 0));
+    m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(esc, esc, esc));
+    pastoMesh.setMatrixAt(a, m); pastoMatOrig[a] = m.clone();
+    const paleta = colorPasto[c] || colorPasto[30];
+    col.set(paleta[a % paleta.length]);
+    pastoMesh.setColorAt(a, col);
+  }
+  pastoMesh.instanceMatrix.needsUpdate = true;
+  scene.add(pastoMesh);
+}
+
+let vegCambioArbol = false, vegCambioPasto = false;
+/** Oculta (si se quemó) o restaura (si no) la vegetación de una celda. */
+function actualizarVegetacionCelda(k, quemada) {
+  const a = vegArbolAt[k];
+  if (a >= 0) {
+    arbolMesh.setMatrixAt(a, quemada ? MAT_CERO : arbolMatOrig[a]);
+    troncoMesh.setMatrixAt(a, quemada ? MAT_CERO : arbolMatOrig[a]);
+    vegCambioArbol = true;
+  }
+  const p = vegPastoAt[k];
+  if (p >= 0) {
+    pastoMesh.setMatrixAt(p, quemada ? MAT_CERO : pastoMatOrig[p]);
+    vegCambioPasto = true;
+  }
+}
+function finalizarActualizacionVegetacion() {
+  if (vegCambioArbol) { arbolMesh.instanceMatrix.needsUpdate = true; troncoMesh.instanceMatrix.needsUpdate = true; vegCambioArbol = false; }
+  if (vegCambioPasto) { pastoMesh.instanceMatrix.needsUpdate = true; vegCambioPasto = false; }
+}
+
 function xzDe(i, j) {
   const n = state.terreno.n;
   const x = (j / (n - 1) - 0.5) * WORLD_SIZE;
@@ -520,12 +653,15 @@ function aplicarFrame() {
       // terreno "quemado": se oscurece in situ (ceniza), sin cubos superpuestos
       color.copy(COLOR_QUEMADA);
       terrainColorAttr.setXYZ(idxVert, color.r, color.g, color.b);
+      actualizarVegetacionCelda(k, true);
     } else {
       // restaurar el color original (vegetación/cortafuegos) si no está quemada
       terrainColorAttr.setXYZ(idxVert, terrainColorOriginal[idxVert * 3], terrainColorOriginal[idxVert * 3 + 1], terrainColorOriginal[idxVert * 3 + 2]);
+      actualizarVegetacionCelda(k, false);
     }
   }
   terrainColorAttr.needsUpdate = true;
+  finalizarActualizacionVegetacion();
 
   // ¿llegó a una celda vecina de zona urbana?
   for (let k = 0; k < combustibleIdx.length && !llegaBorde; k++) {
@@ -759,41 +895,78 @@ function encontrarPadCercaDeUrbano() {
 
 function construirDron() {
   drone = new THREE.Group();
-  const matCuerpo = new THREE.MeshStandardMaterial({ color: 0x23272b, roughness: 0.35, metalness: 0.65 });
-  const matHelice = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.25, metalness: 0.3 });
+  const matCuerpo = new THREE.MeshStandardMaterial({ color: 0x24282c, roughness: 0.4, metalness: 0.55 });
+  const matCuerpoClaro = new THREE.MeshStandardMaterial({ color: 0x3a4046, roughness: 0.3, metalness: 0.6 });
+  const matHelice = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3, metalness: 0.2, transparent: true, opacity: 0.92 });
+  const matAcento = new THREE.MeshStandardMaterial({ color: 0xff8a3d, roughness: 0.4, metalness: 0.3 });
 
-  const cuerpo = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.5), matCuerpo);
-  cuerpo.castShadow = true;
+  // cuerpo: base + "nariz" achatada para dar forma aerodinámica
+  const cuerpo = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.14, 0.58), matCuerpo);
+  cuerpo.position.set(0, 0, -0.02);
   drone.add(cuerpo);
+  const tapa = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.05, 8, 1, false, 0, Math.PI), matCuerpoClaro);
+  tapa.rotation.z = Math.PI / 2; tapa.rotation.y = Math.PI / 2;
+  tapa.position.set(0, 0.08, -0.02);
+  drone.add(tapa);
+  const antena = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.12, 5), matCuerpo);
+  antena.position.set(-0.1, 0.16, 0.05);
+  drone.add(antena);
 
-  const gimbal = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), new THREE.MeshStandardMaterial({ color: 0x0d0d0d, roughness: 0.2 }));
-  gimbal.position.set(0, -0.15, 0.05);
+  // gimbal de 3 ejes con la cámara térmica
+  const aroGimbal = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.014, 8, 16), matCuerpoClaro);
+  aroGimbal.rotation.x = Math.PI / 2;
+  aroGimbal.position.set(0, -0.14, 0.12);
+  drone.add(aroGimbal);
+  const gimbal = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 12), new THREE.MeshStandardMaterial({ color: 0x0b0b0b, roughness: 0.2, metalness: 0.4 }));
+  gimbal.position.set(0, -0.14, 0.12);
   drone.add(gimbal);
-  const lenteTermico = new THREE.Mesh(new THREE.CircleGeometry(0.045, 10), new THREE.MeshBasicMaterial({ color: 0xff8a3d }));
-  lenteTermico.position.set(0, -0.2, 0.1);
+  const lenteTermico = new THREE.Mesh(new THREE.CircleGeometry(0.04, 12), new THREE.MeshStandardMaterial({ color: 0xff8a3d, emissive: 0x552200, roughness: 0.15, metalness: 0.6 }));
+  lenteTermico.position.set(0, -0.18, 0.18);
   lenteTermico.rotation.x = -Math.PI / 2.3;
   drone.add(lenteTermico);
 
-  const luz = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff2b2b }));
-  luz.position.set(0, 0.1, -0.23);
+  // luces de navegación: blanca al frente, roja atrás (convención real de aviación)
+  const luzFrontal = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  luzFrontal.position.set(0, 0.03, 0.28);
+  drone.add(luzFrontal);
+  const luz = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff2b2b }));
+  luz.position.set(0, 0.07, -0.27);
   drone.add(luz);
   drone.userData.luz = luz;
 
   const esquinas = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
   for (const [sx, sz] of esquinas) {
     const ox = sx * 0.42, oz = sz * 0.42;
-    const brazo = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.6, 6), matCuerpo);
-    brazo.position.set(ox / 2, 0.02, oz / 2);
+    const brazo = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.03, 0.6, 8), matCuerpo);
+    brazo.position.set(ox / 2, 0.015, oz / 2);
     brazo.rotation.z = Math.PI / 2;
     brazo.rotation.y = -Math.atan2(oz, ox);
     drone.add(brazo);
-    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.07, 8), matCuerpo);
+    // pata/tren de aterrizaje
+    const pata = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.26, 5), matCuerpo);
+    pata.position.set(ox * 0.82, -0.12, oz * 0.82);
+    pata.rotation.z = sx * 0.18; pata.rotation.x = -sz * 0.18;
+    drone.add(pata);
+    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.058, 0.08, 10), matCuerpo);
     motor.position.set(ox, 0.05, oz);
     drone.add(motor);
-    const helice = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.01, 0.04), matHelice);
-    helice.position.set(ox, 0.095, oz);
-    drone.add(helice);
-    helices.push(helice);
+    const anilloMotor = new THREE.Mesh(new THREE.TorusGeometry(0.053, 0.006, 6, 12), matAcento);
+    anilloMotor.position.set(ox, 0.015, oz);
+    anilloMotor.rotation.x = Math.PI / 2;
+    drone.add(anilloMotor);
+    // disco de "desenfoque" de la hélice girando + 2 aspas finas encima
+    const disco = new THREE.Mesh(new THREE.CircleGeometry(0.23, 20), new THREE.MeshBasicMaterial({ color: 0x9aa0a6, transparent: true, opacity: 0.16, side: THREE.DoubleSide }));
+    disco.rotation.x = -Math.PI / 2; disco.position.set(ox, 0.098, oz);
+    drone.add(disco);
+    const grupoHelice = new THREE.Group();
+    grupoHelice.position.set(ox, 0.1, oz);
+    for (let b = 0; b < 2; b++) {
+      const aspa = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.006, 0.032), matHelice);
+      aspa.rotation.y = b * Math.PI / 2;
+      grupoHelice.add(aspa);
+    }
+    drone.add(grupoHelice);
+    helices.push(grupoHelice);
   }
   drone.scale.setScalar(1.7);
   drone.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
@@ -949,6 +1122,7 @@ async function main() {
 
   crearCieloYLuces();
   construirTerreno();
+  construirVegetacion();
   construirOverlayDeFuego();
   construirHumo();
   construirFuego();
