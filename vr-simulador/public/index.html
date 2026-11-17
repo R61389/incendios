@@ -148,18 +148,27 @@
   }
   #hud.visible { opacity: 1; transform: none; }
 
+  /* Compacto y colapsado por defecto a propósito: la versión anterior (siempre
+     expandida) tapaba buena parte de la escena 3D en el celular. Por defecto
+     se ve solo una línea con el veredicto; tocar/hacer clic despliega el
+     detalle (área quemada de cada escenario, contexto de Monte Carlo). */
   #veredicto {
     pointer-events: auto; width: min(560px, 94vw); padding: 0; font-family: var(--mono);
     --cnc: var(--green); --cut: 11px;
   }
-  #veredicto .hd {
-    font-size: 9.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
-    color: var(--green); padding: 7px 12px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: center; gap: 6px;
+  #veredicto .vHead {
+    width: 100%; display: flex; align-items: center; gap: 8px; background: transparent; border: none;
+    cursor: pointer; padding: 8px 12px; font-family: var(--mono); color: inherit; text-align: left;
   }
-  #veredicto .hd svg.icon { fill: var(--green); }
-  #veredicto .vMain { padding: 7px 12px 2px; font-size: 11.5px; font-weight: 700; color: var(--text); line-height: 1.3; }
-  #veredicto .vSub { padding: 0 12px 8px; font-size: 10px; color: var(--text-dim); line-height: 1.35; }
+  #veredicto .vHead svg.icon { fill: var(--green); flex: none; }
+  #veredicto .vMain { flex: 1; font-size: 11px; font-weight: 700; color: var(--text); line-height: 1.3; }
+  #veredicto .vChev { color: var(--text-dim); font-size: 9px; letter-spacing: 0; transition: transform .2s ease; flex: none; }
+  #veredicto.expanded .vChev { transform: rotate(180deg); }
+  #veredicto .vSub {
+    max-height: 0; overflow: hidden; padding: 0 12px; font-size: 10px; color: var(--text-dim); line-height: 1.35;
+    transition: max-height .25s ease, padding .25s ease; border-top: 1px solid transparent;
+  }
+  #veredicto.expanded .vSub { max-height: 140px; padding: 0 12px 9px; border-top: 1px solid var(--line); }
 
   #timeline {
     pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 16px 7px 7px;
@@ -208,6 +217,32 @@
     padding: 0 13px; display: flex; align-items: center; gap: 7px; --cnc: var(--cyan);
   }
   #btnStereo svg.icon { width: 14px; height: 14px; fill: var(--cyan); }
+
+  /* ---------- comandos de voz ---------- */
+  #btnVoz {
+    pointer-events: auto; flex: none; position: relative; font-family: var(--mono); font-size: 10px; font-weight: 600; --cut: 11px;
+    letter-spacing: .05em; text-transform: uppercase; border: none;
+    color: var(--text-dim); background: rgba(255,255,255,.04);
+    padding: 0 13px; display: flex; align-items: center; gap: 7px; --cnc: var(--line-strong);
+  }
+  #btnVoz svg.icon { width: 14px; height: 14px; fill: var(--text-dim); }
+  #btnVoz.activo { color: var(--amber); background: rgba(255,176,46,.12); --cnc: var(--amber); }
+  #btnVoz.activo svg.icon { fill: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
+
+  /* Sin .tpanel/backdrop-filter a propósito: es un aviso transitorio que
+     aparece y desaparece seguido mientras el micrófono está escuchando, y
+     el vidrio con blur tarda un poco de más en componer la primera vez que
+     se activa. Con fondo sólido se ve siempre al toque, sin ese retraso. */
+  #vozCaption {
+    position: fixed; left: 50%; top: 64px; transform: translateX(-50%); z-index: 15;
+    font-family: var(--mono); font-size: 11px; color: var(--amber);
+    background: rgba(10, 8, 4, .85); border: 1px solid rgba(255, 176, 46, .45);
+    padding: 8px 14px; max-width: min(380px, 80vw);
+    display: flex; align-items: center; gap: 8px;
+    opacity: 0; pointer-events: none; transition: opacity .25s ease;
+  }
+  #vozCaption.activo { opacity: 1; }
+  #vozCaption svg.icon { width: 13px; height: 13px; fill: var(--amber); flex: none; }
 
   button.round {
     pointer-events: auto; flex: none; width: 36px; height: 36px; --cut: 8px; border: none;
@@ -265,17 +300,18 @@
     #brand .txt b { font-size: 11px; }
     #stats { min-width: 176px; }
     #stats .row { font-size: 10px; padding: 5px 10px; }
-    #veredicto .vMain { font-size: 10px; }
+    #veredicto .vMain { font-size: 9.5px; }
     #veredicto .vSub { font-size: 9px; }
     .seg span { font-size: 9px; }
-    #btnVR span, #btnStereo span { display: none; }
-    #btnVR, #btnStereo { padding-left: 11px; padding-right: 11px; }
+    #btnVR span, #btnStereo span, #btnVoz span { display: none; }
+    #btnVR, #btnStereo, #btnVoz { padding-left: 11px; padding-right: 11px; }
   }
   @media (max-width: 380px) {
     #controlsRow { flex-wrap: wrap; }
     #segmented { order: 2; width: 100%; }
     #btnVR { order: 1; flex: 1; justify-content: center; }
     #btnStereo { order: 1; }
+    #btnVoz { order: 1; }
   }
 </style>
 </head>
@@ -297,6 +333,7 @@
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></symbol>
     <symbol id="i-skip" viewBox="0 0 24 24"><path d="M6 5v14l9-7z"/><rect x="16.5" y="5" width="2.4" height="14" rx="1"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5.5A3.5 3.5 0 0 0 12 15z"/><path d="M19 11.5a7 7 0 0 1-14 0H3.3a8.7 8.7 0 0 0 7.9 8.65V22h1.6v-1.85a8.7 8.7 0 0 0 7.9-8.65H19z"/></symbol>
   </defs>
 </svg>
 
@@ -347,8 +384,11 @@
 
 <div id="hud">
   <div id="veredicto" class="tpanel">
-    <div class="hd"><svg class="icon"><use href="#i-shield"/></svg>VEREDICTO · 150 CORRIDAS MONTE CARLO</div>
-    <div class="vMain" id="veredictoTxt">Calculando…</div>
+    <button type="button" class="vHead" id="veredictoToggle" title="Toca para ver el detalle">
+      <svg class="icon"><use href="#i-shield"/></svg>
+      <span class="vMain" id="veredictoTxt">Calculando…</span>
+      <span class="vChev">▾</span>
+    </button>
     <div class="vSub" id="veredictoSub"></div>
   </div>
   <div id="timeline" class="tpanel">
@@ -362,9 +402,15 @@
       <button class="seg" id="btnCortafuegos"><svg class="icon"><use href="#i-shield"/></svg><span>Cortafuegos 250m</span></button>
       <button class="seg" id="btnRiesgo"><svg class="icon"><use href="#i-chart"/></svg><span>Mapa de riesgo</span></button>
     </div>
+    <button id="btnVoz" class="tpanel"><svg class="icon"><use href="#i-mic"/></svg><span>Voz</span></button>
     <button id="btnStereo" class="tpanel"><svg class="icon"><use href="#i-phone"/></svg><span>Cardboard</span></button>
     <button id="btnVR" class="tpanel"><svg class="icon"><use href="#i-vr"/></svg><span>Iniciar VR</span><i class="rdot"></i></button>
   </div>
+</div>
+
+<div id="vozCaption">
+  <svg class="icon"><use href="#i-mic"/></svg>
+  <span id="vozCaptionTxt">Escuchando…</span>
 </div>
 
 <button id="btnSkipIntro" class="tpanel"><span>Saltar</span><svg class="icon"><use href="#i-skip"/></svg></button>

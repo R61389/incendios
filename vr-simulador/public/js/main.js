@@ -658,6 +658,67 @@ function emitirFuego(x, y, z) {
   });
 }
 
+/* ----------------- destello de ignición (el instante en que prende) ----------------- */
+// Pool fijo de sprites (sin crear/destruir objetos en cada frame, para no generar
+// basura/GC en el celular): un breve flash blanco-naranja + ráfaga extra de fuego
+// y humo justo cuando una celda pasa de combustible a ardiendo, para que se note
+// como un evento real (como encender un fósforo) y no como un degradé de video.
+let destelloPool = null;
+
+function construirDestellos() {
+  const MAX = 20;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.25, 'rgba(255,215,130,0.95)');
+  g.addColorStop(0.6, 'rgba(255,120,40,0.45)');
+  g.addColorStop(1, 'rgba(255,80,20,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  const sprites = [];
+  for (let i = 0; i < MAX; i++) {
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    }));
+    spr.visible = false;
+    scene.add(spr);
+    sprites.push(spr);
+  }
+  destelloPool = { sprites, age: new Float32Array(MAX), life: new Float32Array(MAX).fill(0.01), next: 0, max: MAX };
+}
+
+function dispararDestello(x, y, z) {
+  if (!destelloPool) return;
+  const p = destelloPool;
+  const k = p.next; p.next = (p.next + 1) % p.max;
+  p.age[k] = 0; p.life[k] = 0.35 + Math.random() * 0.15;
+  const spr = p.sprites[k];
+  spr.position.set(x, y + 0.18, z);
+  spr.visible = true;
+  spr.scale.setScalar(0.1);
+  spr.material.opacity = 1;
+}
+
+function actualizarDestellos(dt) {
+  if (!destelloPool) return;
+  const p = destelloPool;
+  for (let k = 0; k < p.max; k++) {
+    if (!p.sprites[k].visible) continue;
+    p.age[k] += dt;
+    const t = p.age[k] / p.life[k];
+    if (t >= 1) { p.sprites[k].visible = false; continue; }
+    p.sprites[k].scale.setScalar(THREE.MathUtils.lerp(0.15, 2.4, Math.min(1, t * 2.3)));
+    p.sprites[k].material.opacity = 1 - t;
+  }
+}
+
+function dispararRafagaIgnicion(x, y, z) {
+  dispararDestello(x, y, z);
+  for (let n = 0; n < 6; n++) emitirFuego(x, y, z);
+  for (let n = 0; n < 2; n++) emitirHumo(x, y + 0.1, z, false);
+}
+
 function actualizarPool(s, dt) {
   const pos = s.geo.attributes.position;
   const alpha = s.geo.attributes.aAlpha;
@@ -727,6 +788,8 @@ function colorRiesgo(p) {
   return c;
 }
 
+let estadoFuegoAnterior = null; // Uint8Array(combustibleIdx.length): 1 si la celda ya estaba ardiendo (v===2) en el frame anterior
+
 function aplicarFrame() {
   const esc = state.escenarios[state.escenarioActual];
   const frame = esc.frames[Math.min(state.frameIdx, esc.frames.length - 1)];
@@ -735,6 +798,11 @@ function aplicarFrame() {
   const n = state.terreno.n;
   const borde = state.terreno.urbano;
   const color = new THREE.Color();
+
+  if (!estadoFuegoAnterior || estadoFuegoAnterior.length !== combustibleIdx.length) {
+    estadoFuegoAnterior = new Uint8Array(combustibleIdx.length);
+  }
+  if (state.frameIdx === 0) estadoFuegoAnterior.fill(0);
 
   state.celdasEnLlamas = [];
   for (let k = 0; k < combustibleIdx.length; k++) {
@@ -747,12 +815,19 @@ function aplicarFrame() {
         const [x, z] = xzDe(i, j);
         const y = heightAt(i, j);
         state.celdasEnLlamas.push({ x, y, z });
+        // recién se prendió esta celda (no estaba ardiendo en el frame anterior):
+        // ráfaga de ignición, para que se vea un evento real y no un degradé parejo
+        if (!estadoFuegoAnterior[k]) dispararRafagaIgnicion(x, y, z);
+        estadoFuegoAnterior[k] = 1;
+      } else {
+        estadoFuegoAnterior[k] = 0;
       }
       // terreno "quemado": se oscurece in situ (ceniza), sin cubos superpuestos
       color.copy(COLOR_QUEMADA);
       terrainColorAttr.setXYZ(idxVert, color.r, color.g, color.b);
       actualizarVegetacionCelda(k, true);
     } else {
+      estadoFuegoAnterior[k] = 0;
       // restaurar el color original (vegetación/cortafuegos) si no está quemada
       terrainColorAttr.setXYZ(idxVert, terrainColorOriginal[idxVert * 3], terrainColorOriginal[idxVert * 3 + 1], terrainColorOriginal[idxVert * 3 + 2]);
       actualizarVegetacionCelda(k, false);
@@ -1041,6 +1116,12 @@ function poblarBrujula() {
 }
 
 function wireUI() {
+  $('veredictoToggle').addEventListener('click', () => {
+    $('veredicto').classList.toggle('expanded');
+  });
+  $('btnVoz').addEventListener('click', () => {
+    if (vozActiva) detenerComandosDeVoz(); else iniciarComandosDeVoz();
+  });
   $('btnBase').addEventListener('click', () => {
     state.escenarioActual = 'base'; state.frameIdx = 0; state.modoRiesgo = false;
     $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active');
@@ -1170,6 +1251,90 @@ function salirStereoManual() {
   window.removeEventListener('deviceorientation', onDeviceOrientation);
   $('fallbackNotice').style.display = 'none';
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+/* ------------------------------ comandos de voz ------------------------------ */
+// Pensado para cuando el celular ya está puesto en el visor y no se pueden
+// tocar los botones: activás la voz antes, y después decís el nombre del
+// escenario, "pausa"/"reproduce", "reinicia" o "cortafuegos" para manejarlo
+// todo sin sacar el teléfono. Nota: igual que el giroscopio del modo
+// Cardboard, la Web Speech API de Chrome solo funciona en https:// o
+// localhost — por eso puede no reaccionar si lo estás probando por http://
+// con la IP local.
+let reconocimientoVoz = null;
+let vozActiva = false;
+let vozCaptionTimer = null;
+
+function mostrarCaptionVoz(texto, esError) {
+  const cap = $('vozCaption');
+  $('vozCaptionTxt').textContent = texto;
+  cap.style.color = esError ? 'var(--red)' : '';
+  cap.classList.add('activo');
+  clearTimeout(vozCaptionTimer);
+  vozCaptionTimer = setTimeout(() => { cap.classList.remove('activo'); }, 2600);
+}
+
+function procesarComandoDeVoz(textoCrudo) {
+  const texto = textoCrudo.toLowerCase();
+  mostrarCaptionVoz(`"${textoCrudo}"`);
+  if (/riesgo/.test(texto)) {
+    if (!state.modoRiesgo) $('btnRiesgo').click();
+  } else if (/cortafuego/.test(texto)) {
+    $('btnCortafuegos').click();
+  } else if (/sin intervenci|normal|base\b/.test(texto)) {
+    $('btnBase').click();
+  } else if (/pausa|detener|para\b/.test(texto)) {
+    if (state.playing) $('btnPlay').click();
+  } else if (/reproduc|play|contin[uú]a|arranca|dale/.test(texto)) {
+    if (!state.playing) $('btnPlay').click();
+  } else if (/reinici|desde el inicio|empieza de nuevo/.test(texto)) {
+    state.frameIdx = 0; aplicarFrame();
+  } else if (/cardboard|visor|lentes/.test(texto)) {
+    if (!stereoActivo) activarStereoManual();
+  } else if (/veredicto|an[aá]lisis|mejor opci[oó]n/.test(texto)) {
+    $('veredicto').classList.toggle('expanded');
+  }
+}
+
+function iniciarComandosDeVoz() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    mostrarCaptionVoz('Este navegador no soporta reconocimiento de voz.', true);
+    return;
+  }
+  if (!reconocimientoVoz) {
+    reconocimientoVoz = new SR();
+    reconocimientoVoz.lang = 'es-ES';
+    reconocimientoVoz.continuous = true;
+    reconocimientoVoz.interimResults = false;
+    reconocimientoVoz.onresult = (e) => {
+      const ultimo = e.results[e.results.length - 1];
+      if (ultimo.isFinal) procesarComandoDeVoz(ultimo[0].transcript.trim());
+    };
+    reconocimientoVoz.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        mostrarCaptionVoz('Permiso de micrófono denegado.', true);
+        detenerComandosDeVoz();
+      }
+      // 'no-speech' y 'aborted' son normales (silencio o un stop() nuestro); se ignoran.
+    };
+    reconocimientoVoz.onend = () => {
+      // Chrome corta el reconocimiento solo de a ratos aunque sea "continuous";
+      // si el usuario no lo apagó, lo reiniciamos para que siga escuchando.
+      if (vozActiva) { try { reconocimientoVoz.start(); } catch (_) { /* ya estaba iniciado */ } }
+    };
+  }
+  vozActiva = true;
+  $('btnVoz').classList.add('activo');
+  mostrarCaptionVoz('Escuchando… di un escenario, "pausa" o "reproduce".');
+  try { reconocimientoVoz.start(); } catch (_) { /* ya estaba iniciado */ }
+}
+
+function detenerComandosDeVoz() {
+  vozActiva = false;
+  $('btnVoz').classList.remove('activo');
+  $('vozCaption').classList.remove('activo');
+  if (reconocimientoVoz) { try { reconocimientoVoz.stop(); } catch (_) { /* nada que hacer */ } }
 }
 
 /* --------------------------------- main ---------------------------------- */
@@ -1468,6 +1633,7 @@ async function main() {
   construirOverlayDeFuego();
   construirHumo();
   construirFuego();
+  construirDestellos();
   construirLucesIncendio();
   wireUI();
   setupVR();
@@ -1520,6 +1686,7 @@ async function main() {
     }
     actualizarHumo(dt);
     actualizarFuego(dt);
+    actualizarDestellos(dt);
     actualizarNubes(dt);
     actualizarAnimCortafuegos(dt);
     if (!introState.activo && !state.modoRiesgo) {
