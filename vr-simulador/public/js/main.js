@@ -789,6 +789,17 @@ function colorRiesgo(p) {
 }
 
 let estadoFuegoAnterior = null; // Uint8Array(combustibleIdx.length): 1 si la celda ya estaba ardiendo (v===2) en el frame anterior
+let fuegoVisualHasta = null; // Float32Array(combustibleIdx.length): hasta qué momento (relojFuego) se la sigue mostrando en llamas
+
+// Cada frame guardado representa varios pasos reales del autómata (ver
+// pasosGuardadosCada/dtMin); una celda de pajonal arde solo 4 pasos (12 min
+// simulados) y una arbórea 6 (18 min), así que a veces aparece como "en
+// llamas" en un único frame de datos — a 2.2 frames/seg eso es menos de medio
+// segundo en pantalla, demasiado poco para verse arder de verdad. Por eso la
+// parte VISUAL (llamas/humo/luces) se mantiene encendida un mínimo de tiempo
+// real aunque el dato ya haya pasado a "ceniza"; el dato de hectáreas/tiempo
+// quemado no cambia, solo se alarga cuánto se ve arder.
+const DURACION_VISUAL_FUEGO = 1.3;
 
 function aplicarFrame() {
   const esc = state.escenarios[state.escenarioActual];
@@ -801,8 +812,16 @@ function aplicarFrame() {
 
   if (!estadoFuegoAnterior || estadoFuegoAnterior.length !== combustibleIdx.length) {
     estadoFuegoAnterior = new Uint8Array(combustibleIdx.length);
+    fuegoVisualHasta = new Float32Array(combustibleIdx.length);
   }
-  if (state.frameIdx === 0) estadoFuegoAnterior.fill(0);
+  if (state.frameIdx === 0) { estadoFuegoAnterior.fill(0); fuegoVisualHasta.fill(0); }
+
+  // celdas quemadas por tipo de vegetación real (clase_esa de la grilla): es
+  // el conteo más cercano a "plantas afectadas" que da el dato real — el CSV
+  // tiene tipo de vegetación y una densidad cualitativa (escasa/normal/densa)
+  // por celda de 25×25 m, no un número de plantas individuales.
+  const porClase = { 10: 0, 20: 0, 30: 0, 40: 0 };
+  const clase = state.terreno.clase;
 
   state.celdasEnLlamas = [];
   for (let k = 0; k < combustibleIdx.length; k++) {
@@ -811,16 +830,25 @@ function aplicarFrame() {
     const idxVert = i * n + j;
     if (v === 2 || v === 3) {
       haQuemadas++;
+      porClase[clase[i][j]] = (porClase[clase[i][j]] || 0) + 1;
       if (v === 2) {
         const [x, z] = xzDe(i, j);
         const y = heightAt(i, j);
         state.celdasEnLlamas.push({ x, y, z });
+        fuegoVisualHasta[k] = relojFuego + DURACION_VISUAL_FUEGO;
         // recién se prendió esta celda (no estaba ardiendo en el frame anterior):
         // ráfaga de ignición, para que se vea un evento real y no un degradé parejo
         if (!estadoFuegoAnterior[k]) dispararRafagaIgnicion(x, y, z);
         estadoFuegoAnterior[k] = 1;
       } else {
         estadoFuegoAnterior[k] = 0;
+        // ya es ceniza en el dato, pero todavía dentro del mínimo visual: se
+        // sigue viendo arder (sin disparar otra ráfaga de ignición)
+        if (fuegoVisualHasta[k] > relojFuego) {
+          const [x, z] = xzDe(i, j);
+          const y = heightAt(i, j);
+          state.celdasEnLlamas.push({ x, y, z });
+        }
       }
       // terreno "quemado": se oscurece in situ (ceniza), sin cubos superpuestos
       color.copy(COLOR_QUEMADA);
@@ -858,6 +886,10 @@ function aplicarFrame() {
   $('statLlega').classList.toggle('on', llegaBorde);
   $('statTiempo').textContent = `${String(minutos).padStart(2, '0')} MIN`;
   $('statDuracion').textContent = formatearDuracion(minutosTotales);
+  const celdaHa = state.terreno.celda_m ** 2 / 10000;
+  $('statArborea').textContent = `${porClase[10]} CELDAS (${(porClase[10] * celdaHa).toFixed(1)} HA)`;
+  const otras = porClase[20] + porClase[30] + porClase[40];
+  $('statOtraVeg').textContent = `${otras} CELDAS (${(otras * celdaHa).toFixed(1)} HA)`;
   $('timeClock').textContent = `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${String(minutos % 60).padStart(2, '0')}`;
   $('scrub').max = String(esc.frames.length - 1);
   $('scrub').value = String(state.frameIdx);
@@ -903,6 +935,8 @@ function aplicarMapaDeRiesgo(activar) {
   $('statLlega').classList.remove('on');
   $('statTiempo').textContent = '8H SIN CTRL';
   $('statDuracion').textContent = '—';
+  $('statArborea').textContent = '—';
+  $('statOtraVeg').textContent = '—';
 }
 
 function formatearDuracion(minutosTotales) {
@@ -1137,6 +1171,9 @@ function poblarBrujula() {
 function wireUI() {
   $('veredictoToggle').addEventListener('click', () => {
     $('veredicto').classList.toggle('expanded');
+  });
+  $('fuentesToggle').addEventListener('click', () => {
+    $('fuentes').classList.toggle('expanded');
   });
   $('btnVoz').addEventListener('click', () => {
     if (vozActiva) detenerComandosDeVoz(); else iniciarComandosDeVoz();
