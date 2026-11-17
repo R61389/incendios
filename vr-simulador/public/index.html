@@ -5,207 +5,243 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Simulador VR · Incendios Tunari</title>
 <style>
-  @font-face {
-    font-family: 'Inter'; font-style: normal; font-weight: 400 700; font-display: swap;
-    src: url('./fonts/inter-latin-600-normal.woff2') format('woff2');
-  }
   @font-face { font-family: 'Inter'; font-weight: 400; src: url('./fonts/inter-latin-400-normal.woff2') format('woff2'); font-display: swap; }
   @font-face { font-family: 'Inter'; font-weight: 500; src: url('./fonts/inter-latin-500-normal.woff2') format('woff2'); font-display: swap; }
   @font-face { font-family: 'Inter'; font-weight: 600; src: url('./fonts/inter-latin-600-normal.woff2') format('woff2'); font-display: swap; }
-  @font-face { font-family: 'Inter'; font-weight: 700; src: url('./fonts/inter-latin-700-normal.woff2') format('woff2'); font-display: swap; }
-  @font-face { font-family: 'Space Grotesk'; font-weight: 500; src: url('./fonts/space-grotesk-latin-500-normal.woff2') format('woff2'); font-display: swap; }
   @font-face { font-family: 'Space Grotesk'; font-weight: 600; src: url('./fonts/space-grotesk-latin-600-normal.woff2') format('woff2'); font-display: swap; }
   @font-face { font-family: 'Space Grotesk'; font-weight: 700; src: url('./fonts/space-grotesk-latin-700-normal.woff2') format('woff2'); font-display: swap; }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: url('./fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2'); font-display: swap; }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: url('./fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2'); font-display: swap; }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 600; src: url('./fonts/jetbrains-mono-latin-600-normal.woff2') format('woff2'); font-display: swap; }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 700; src: url('./fonts/jetbrains-mono-latin-700-normal.woff2') format('woff2'); font-display: swap; }
 
   :root {
     color-scheme: dark;
-    --bg: #0a0d11;
-    --panel: rgba(13, 17, 22, 0.86);
-    --panel-2: rgba(22, 27, 33, 0.92);
-    --panel-border: rgba(255,255,255,0.07);
-    --accent: #ff6a2c;
-    --accent-2: #ffab5c;
-    --accent-soft: rgba(255, 106, 44, 0.16);
-    --safe: #35c488;
-    --text: #f3f6f8;
-    --text-dim: #8d98a1;
-    --radius: 18px;
-    --radius-sm: 12px;
+    --bg: #05070a;
+    --panel: rgba(6, 10, 13, 0.82);
+    --line: rgba(130, 220, 230, 0.22);
+    --line-strong: rgba(130, 220, 230, 0.55);
+    --amber: #ffb02e;
+    --amber-dim: #a87530;
+    --cyan: #5fe3ef;
+    --red: #ff4545;
+    --green: #39e68c;
+    --text: #e8f1f3;
+    --text-dim: #5d7278;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Inter', 'Segoe UI', Arial, sans-serif;
+    --disp: 'Space Grotesk', var(--sans);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
-  body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; color: var(--text); }
+  body { font-family: var(--sans); color: var(--text); }
   #app { position: fixed; inset: 0; }
   canvas { display: block; touch-action: none; }
-  svg.icon { width: 17px; height: 17px; flex: none; display: block; }
+  svg.icon { width: 15px; height: 15px; flex: none; display: block; }
 
-  .panel {
-    background: var(--panel);
-    backdrop-filter: blur(14px) saturate(1.3);
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius);
-    box-shadow: 0 10px 34px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.04);
+  /* textura de escaneo sobre toda la pantalla */
+  #scan {
+    position: fixed; inset: 0; z-index: 5; pointer-events: none; mix-blend-mode: overlay;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 3px);
+    opacity: .5;
   }
+  #scanSweep {
+    position: fixed; left: 0; right: 0; height: 140px; z-index: 6; pointer-events: none;
+    background: linear-gradient(180deg, transparent, rgba(95,227,239,0.05), transparent);
+    animation: sweep 7s linear infinite;
+  }
+  @keyframes sweep { 0% { top: -140px; } 100% { top: 100%; } }
+
+  /* ---------- panel táctico con esquinas de escuadra ---------- */
+  .tpanel {
+    position: relative; background: var(--panel); backdrop-filter: blur(10px);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(0,0,0,.55);
+  }
+  .cnr { position: absolute; width: 9px; height: 9px; pointer-events: none; }
+  .cnr.tl { top: -1px; left: -1px; border-top: 2px solid var(--cnc, var(--cyan)); border-left: 2px solid var(--cnc, var(--cyan)); }
+  .cnr.tr { top: -1px; right: -1px; border-top: 2px solid var(--cnc, var(--cyan)); border-right: 2px solid var(--cnc, var(--cyan)); }
+  .cnr.bl { bottom: -1px; left: -1px; border-bottom: 2px solid var(--cnc, var(--cyan)); border-left: 2px solid var(--cnc, var(--cyan)); }
+  .cnr.br { bottom: -1px; right: -1px; border-bottom: 2px solid var(--cnc, var(--cyan)); border-right: 2px solid var(--cnc, var(--cyan)); }
+
+  .tag {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .tag::before { content: '// '; color: var(--line-strong); }
 
   /* ---------- marca ---------- */
   #brand {
-    position: fixed; left: 14px; top: 14px; z-index: 10;
-    display: flex; align-items: center; gap: 10px; max-width: 52vw;
-    pointer-events: none; opacity: 0; transition: opacity .6s ease;
+    position: fixed; left: 12px; top: 12px; z-index: 10;
+    display: flex; align-items: stretch; gap: 0; max-width: 58vw;
+    opacity: 0; transition: opacity .6s ease; --cnc: var(--amber);
   }
   #brand .logo {
-    width: 34px; height: 34px; border-radius: 10px; flex: none;
-    background: linear-gradient(145deg, var(--accent), #b3350f);
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 4px 14px rgba(255,106,44,0.35);
+    width: 40px; flex: none; display: flex; align-items: center; justify-content: center;
+    border-right: 1px solid var(--line);
   }
-  #brand .logo svg { width: 18px; height: 18px; fill: #fff7ef; }
-  #brand .txt { font-family: 'Space Grotesk', 'Inter', sans-serif; line-height: 1.22; min-width: 0; }
-  #brand .txt b { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #brand .txt span { color: var(--text-dim); font-size: 10px; letter-spacing: .09em; text-transform: uppercase; font-weight: 500; }
+  #brand .logo svg { width: 17px; height: 17px; fill: var(--amber); filter: drop-shadow(0 0 5px rgba(255,176,46,.7)); }
+  #brand .txt { padding: 7px 12px; min-width: 0; }
+  #brand .txt b {
+    display: block; font-family: var(--disp); font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+    color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #brand .txt .tag { margin-top: 1px; }
   #brand.visible { opacity: 1; }
 
-  /* ---------- panel de estadísticas ---------- */
+  /* ---------- brújula de viento ---------- */
+  #compass {
+    position: fixed; left: 12px; top: 68px; z-index: 10; width: 86px;
+    padding: 8px; opacity: 0; transition: opacity .6s ease .1s; --cnc: var(--cyan);
+  }
+  #compass.visible { opacity: 1; }
+  #compass .tag { display: block; text-align: center; margin-bottom: 4px; }
+  #compass .ring { position: relative; width: 56px; height: 56px; margin: 0 auto; }
+  #compass .ring svg { width: 100%; height: 100%; }
+  #compass .deg { text-align: center; font-family: var(--mono); font-size: 10px; color: var(--cyan); margin-top: 3px; letter-spacing: .03em; }
+  #compass .kmh { text-align: center; font-family: var(--mono); font-size: 8.5px; color: var(--text-dim); }
+
+  /* ---------- telemetría (estadísticas) ---------- */
   #stats {
-    position: fixed; right: 14px; top: 14px; z-index: 10;
-    padding: 4px; font-size: 12.5px; min-width: 198px;
+    position: fixed; right: 12px; top: 12px; z-index: 10;
+    padding: 0; font-family: var(--mono); min-width: 206px;
     opacity: 0; transform: translateY(-6px); transition: opacity .5s ease, transform .5s ease;
+    --cnc: var(--amber);
   }
   #stats .hd {
-    font-family: 'Space Grotesk', sans-serif; font-size: 10px; font-weight: 600;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim);
-    padding: 9px 13px 6px;
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--amber); padding: 8px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px;
   }
-  #stats .row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 6px 13px; }
-  #stats .row + .row { border-top: 1px solid rgba(255,255,255,0.055); }
-  #stats .label { color: var(--text-dim); font-size: 12px; }
-  #stats .val { font-weight: 700; font-variant-numeric: tabular-nums; }
-  #stats .val.on { color: var(--accent-2); }
+  #stats .hd .rec { width: 5px; height: 5px; border-radius: 50%; background: var(--red); animation: pulse 1.1s ease-in-out infinite; }
+  #stats .row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 6px 12px; font-size: 11px; }
+  #stats .row + .row { border-top: 1px dashed rgba(255,255,255,0.07); }
+  #stats .label { color: var(--text-dim); letter-spacing: .02em; }
+  #stats .val { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+  #stats .val.on { color: var(--red); }
   #stats.visible { opacity: 1; transform: none; }
 
   /* ---------- controles inferiores ---------- */
   #hud {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-    display: flex; flex-direction: column; align-items: center; gap: 9px;
-    padding: 0 12px calc(16px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 0 10px calc(14px + env(safe-area-inset-bottom));
     pointer-events: none;
     opacity: 0; transform: translateY(14px); transition: opacity .5s ease, transform .5s ease;
   }
   #hud.visible { opacity: 1; transform: none; }
 
-  #timeline { pointer-events: auto; display: flex; align-items: center; gap: 13px; padding: 7px 9px 7px 7px; width: min(560px, 94vw); }
-  #timeline input[type=range] {
-    flex: 1; accent-color: var(--accent); height: 3px; margin: 0;
+  #timeline {
+    pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 14px 7px 7px;
+    width: min(560px, 94vw); --cnc: var(--cyan);
   }
-  #timeClock { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 50px; text-align: right; color: var(--text-dim); font-weight: 500; }
+  #timeline input[type=range] { flex: 1; accent-color: var(--amber); height: 2px; margin: 0; }
+  #timeClock { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11.5px; min-width: 46px; text-align: right; color: var(--cyan); }
 
-  #controlsRow { pointer-events: none; display: flex; align-items: stretch; gap: 8px; width: min(760px, 96vw); }
+  #controlsRow { pointer-events: none; display: flex; align-items: stretch; gap: 7px; width: min(760px, 96vw); }
 
-  /* selector segmentado de escenario */
-  #segmented {
-    pointer-events: auto; display: flex; padding: 4px; gap: 3px; flex: 1 1 auto; min-width: 0;
-  }
+  #segmented { pointer-events: auto; display: flex; padding: 3px; gap: 3px; flex: 1 1 auto; min-width: 0; --cnc: var(--amber); }
   .seg {
-    flex: 1; font-family: inherit; font-size: 12px; font-weight: 600;
-    color: var(--text-dim); background: transparent; border: none; border-radius: 11px;
+    flex: 1; font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+    color: var(--text-dim); background: transparent; border: 1px solid transparent; border-radius: 0;
     padding: 9px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px;
-    transition: background .18s ease, color .18s ease; min-width: 0;
+    transition: background .15s ease, color .15s ease, border-color .15s ease; min-width: 0;
+    text-transform: uppercase;
   }
-  .seg svg.icon { width: 16px; height: 16px; }
+  .seg svg.icon { width: 14px; height: 14px; }
   .seg span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .seg.active { background: var(--accent-soft); color: var(--accent-2); }
-  .seg:active { transform: scale(0.96); }
+  .seg.active { background: rgba(255,176,46,0.09); border-color: rgba(255,176,46,.45); color: var(--amber); }
+  .seg.active svg.icon { fill: var(--amber); }
+  .seg:not(.active) svg.icon { fill: var(--text-dim); }
+  .seg:active { transform: scale(0.97); }
 
-  /* botón principal VR */
   #btnVR {
-    pointer-events: auto; flex: none; font-family: 'Space Grotesk', sans-serif;
-    font-size: 13px; font-weight: 600; letter-spacing: .01em; color: #0c1410;
-    background: linear-gradient(135deg, var(--safe), #1f9e6c); border: none;
-    border-radius: 15px; padding: 0 18px; cursor: pointer;
-    display: flex; align-items: center; gap: 8px;
-    box-shadow: 0 8px 22px rgba(53,196,136,0.33), inset 0 1px 0 rgba(255,255,255,0.25);
-    transition: transform .12s ease, filter .15s ease;
+    pointer-events: auto; flex: none; position: relative; font-family: var(--mono);
+    font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--green);
+    background: rgba(57,230,140,0.08); border: 1px solid rgba(57,230,140,.5);
+    padding: 0 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; --cnc: var(--green);
   }
-  #btnVR svg.icon { width: 18px; height: 18px; fill: #0c1410; }
-  #btnVR:active { transform: scale(0.96); }
-  #btnVR:disabled { background: #2a3038; color: var(--text-dim); box-shadow: none; filter: none; cursor: default; }
+  #btnVR svg.icon { width: 16px; height: 16px; fill: var(--green); }
+  #btnVR::after {
+    content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 8px var(--green); animation: pulse 1.3s ease-in-out infinite; margin-left: 2px;
+  }
+  #btnVR:active { transform: scale(0.97); }
+  #btnVR:disabled {
+    color: var(--text-dim); background: rgba(255,255,255,.03); border-color: var(--line); cursor: default;
+  }
   #btnVR:disabled svg.icon { fill: var(--text-dim); }
+  #btnVR:disabled::after { display: none; }
 
   #btnStereo {
-    pointer-events: auto; flex: none; font-family: inherit; font-size: 11.5px; font-weight: 600;
-    color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--panel-border);
-    border-radius: 15px; padding: 0 14px; cursor: pointer; display: flex; align-items: center; gap: 7px;
+    pointer-events: auto; flex: none; font-family: var(--mono); font-size: 10px; font-weight: 600;
+    letter-spacing: .05em; text-transform: uppercase;
+    color: var(--cyan); background: rgba(95,227,239,0.06); border: 1px solid rgba(95,227,239,.35);
+    padding: 0 13px; cursor: pointer; display: flex; align-items: center; gap: 7px; --cnc: var(--cyan);
   }
-  #btnStereo svg.icon { width: 15px; height: 15px; }
-  #btnStereo:active { transform: scale(0.96); }
+  #btnStereo svg.icon { width: 14px; height: 14px; fill: var(--cyan); }
+  #btnStereo:active { transform: scale(0.97); }
 
   button.round {
-    pointer-events: auto; flex: none; width: 38px; height: 38px; border-radius: 50%;
+    pointer-events: auto; flex: none; width: 36px; height: 36px;
     display: flex; align-items: center; justify-content: center;
-    background: var(--panel-2); border: 1px solid var(--panel-border); color: var(--text); cursor: pointer;
+    background: rgba(95,227,239,0.06); border: 1px solid var(--line); color: var(--cyan); cursor: pointer; --cnc: var(--cyan);
   }
-  button.round svg.icon { width: 15px; height: 15px; fill: var(--text); margin-left: 1px; }
-  button.round:active { transform: scale(0.93); }
+  button.round svg.icon { width: 13px; height: 13px; fill: var(--cyan); margin-left: 1px; }
+  button.round:active { transform: scale(0.92); }
 
-  /* ---------- pantalla de carga ---------- */
+  @keyframes pulse { 0%,100%{opacity:.35; transform: scale(.75);} 50%{opacity:1; transform: scale(1.1);} }
+
+  /* ---------- pantalla de carga: secuencia de arranque ---------- */
   #loading {
-    position: fixed; inset: 0; z-index: 60; background: radial-gradient(ellipse at 50% 38%, #1c130c 0%, #0a0d11 68%);
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    position: fixed; inset: 0; z-index: 60; background: #05070a;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
   }
-  #loading .logo {
-    width: 54px; height: 54px; border-radius: 15px;
-    background: linear-gradient(145deg, var(--accent), #b3350f);
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 6px 24px rgba(255,106,44,0.4);
-    animation: breathe 1.8s ease-in-out infinite;
-  }
-  #loading .logo svg { width: 28px; height: 28px; fill: #fff7ef; }
-  @keyframes breathe { 0%,100%{ transform: scale(1); } 50%{ transform: scale(1.07); } }
-  #loading .txt { color: var(--text-dim); font-size: 13px; letter-spacing: .02em; text-align: center; padding: 0 20px; }
-  #loading .brandline { font-family: 'Space Grotesk', sans-serif; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #5a646c; }
+  #loading .logoBig { position: relative; width: 64px; height: 64px; }
+  #loading .logoBig svg.ring { position: absolute; inset: 0; width: 100%; height: 100%; animation: spin 2.4s linear infinite; }
+  #loading .logoBig .flm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #loading .logoBig .flm svg { width: 24px; height: 24px; fill: var(--amber); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading .bootline { font-family: var(--mono); font-size: 11.5px; color: var(--cyan); letter-spacing: .03em; min-height: 16px; }
+  #loading .bootline .k { color: var(--text-dim); }
+  #loading .barWrap { width: 220px; height: 3px; background: rgba(255,255,255,.08); position: relative; overflow: hidden; }
+  #loading .barFill { position: absolute; inset: 0; width: 30%; background: var(--amber); animation: load 1.3s ease-in-out infinite; }
+  @keyframes load { 0%{ transform: translateX(-100%);} 100%{ transform: translateX(333%);} }
+  #loading .brandline { font-family: var(--mono); font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--text-dim); }
 
-  /* ---------- intro del dron ---------- */
+  /* ---------- intro del dron: registro de telemetría ---------- */
   #introCaption {
-    position: fixed; left: 0; right: 0; bottom: 42px; z-index: 20;
-    display: none; align-items: center; justify-content: center; pointer-events: none;
+    position: fixed; left: 12px; bottom: 16px; z-index: 20; display: none;
+    font-family: var(--mono); font-size: 11.5px; color: var(--cyan);
+    padding: 9px 14px; max-width: min(420px, 70vw); --cnc: var(--cyan);
   }
-  #introCaption .panel2 {
-    background: var(--panel-2); backdrop-filter: blur(10px);
-    border: 1px solid var(--panel-border); border-radius: 999px;
-    padding: 11px 22px; font-size: 12.5px; font-weight: 500; letter-spacing: .02em; color: #ffdcc2;
-    display: flex; align-items: center; gap: 10px; transition: opacity .4s ease;
-    box-shadow: 0 10px 30px rgba(0,0,0,.4);
-  }
-  #introCaption .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:.3; transform: scale(.8);} 50%{opacity:1; transform: scale(1.15);} }
+  #introCaption .ln { display: flex; align-items: baseline; gap: 8px; }
+  #introCaption .ln .pfx { color: var(--amber); }
+  #introCaption .cursor { display: inline-block; width: 6px; height: 11px; background: var(--cyan); margin-left: 2px; animation: pulse 0.9s steps(2) infinite; vertical-align: -1px; }
 
   #btnSkipIntro {
-    position: fixed; right: 16px; top: 16px; z-index: 20; display: none;
-    font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; color: var(--text);
-    background: var(--panel-2); border: 1px solid var(--panel-border);
-    padding: 9px 11px 9px 16px; border-radius: 999px; cursor: pointer; backdrop-filter: blur(8px);
-    display: flex; align-items: center; gap: 7px;
+    position: fixed; right: 14px; top: 14px; z-index: 20; display: none;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--text-dim); background: var(--panel); border: 1px solid var(--line);
+    padding: 8px 10px 8px 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; --cnc: var(--cyan);
   }
-  #btnSkipIntro svg.icon { width: 14px; height: 14px; fill: var(--text); }
+  #btnSkipIntro svg.icon { width: 12px; height: 12px; fill: var(--text-dim); }
   #btnSkipIntro:active { transform: scale(0.96); }
 
   #fallbackNotice {
-    position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%);
-    z-index: 10; color: #ffdcc2; background: rgba(60, 28, 8, .62); border: 1px solid rgba(255,138,76,.35);
-    padding: 8px 16px; border-radius: 999px; font-size: 12px; font-weight: 500; display: none; pointer-events: none;
-    backdrop-filter: blur(6px);
+    position: fixed; left: 50%; bottom: 126px; transform: translateX(-50%);
+    z-index: 10; font-family: var(--mono); color: var(--amber); background: rgba(10,8,4,.7); border: 1px solid rgba(255,176,46,.35);
+    padding: 8px 16px; font-size: 11px; display: none; pointer-events: none;
   }
 
   @media (max-width: 480px) {
-    #brand .txt b { font-size: 12px; }
-    #brand .txt span { font-size: 8.5px; }
-    #brand .logo { width: 28px; height: 28px; border-radius: 8px; }
-    #brand .logo svg { width: 15px; height: 15px; }
-    #stats { min-width: 158px; font-size: 11px; right: 10px; top: 10px; }
-    #brand { left: 10px; top: 10px; max-width: 46vw; }
-    .seg span { font-size: 10.5px; }
-    #btnVR, #btnStereo { padding-left: 12px; padding-right: 12px; }
+    #compass { display: none; }
+    #brand { max-width: 38vw; }
+    #brand .txt b { font-size: 11px; }
+    #stats { min-width: 176px; }
+    #stats .row { font-size: 10px; padding: 5px 10px; }
+    .seg span { font-size: 9px; }
     #btnVR span, #btnStereo span { display: none; }
+    #btnVR, #btnStereo { padding-left: 11px; padding-right: 11px; }
   }
   @media (max-width: 380px) {
     #controlsRow { flex-wrap: wrap; }
@@ -237,49 +273,79 @@
 </svg>
 
 <div id="loading">
-  <div class="logo"><svg viewBox="0 0 24 24"><use href="#i-flame"/></svg></div>
-  <div>
-    <div class="brandline">SIM-522 · Grupo 3</div>
+  <div class="logoBig">
+    <svg class="ring" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,176,46,.18)" stroke-width="2"/><circle cx="32" cy="32" r="29" fill="none" stroke="#ffb02e" stroke-width="2" stroke-dasharray="40 142" stroke-linecap="round"/></svg>
+    <div class="flm"><svg viewBox="0 0 24 24"><use href="#i-flame"/></svg></div>
   </div>
-  <div class="txt">Cargando el terreno real del sector Cercado…</div>
+  <div class="bootline"><span class="k">&gt;</span> <span id="bootText">INICIALIZANDO SISTEMA…</span></div>
+  <div class="barWrap"><div class="barFill"></div></div>
+  <div class="brandline">SIM-522 · Grupo 3 · Incendios Tunari</div>
 </div>
 
 <div id="app"></div>
+<div id="scan"></div>
+<div id="scanSweep"></div>
 
-<div id="brand">
+<div id="brand" class="tpanel">
+  <i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i>
   <div class="logo"><svg viewBox="0 0 24 24"><use href="#i-flame"/></svg></div>
-  <div class="txt"><b>Incendios Tunari VR</b><span>SIM-522 · Grupo 3</span></div>
+  <div class="txt"><b>INCENDIOS TUNARI · VR</b><span class="tag">SIM-522 GRUPO 3</span></div>
 </div>
 
-<div id="stats" class="panel">
-  <div class="hd">Estado de la simulación</div>
-  <div class="row"><span class="label">Escenario</span><span class="val" id="statEscenario">Base</span></div>
-  <div class="row"><span class="label">Hectáreas quemadas</span><span class="val" id="statHa">0.0 ha</span></div>
-  <div class="row"><span class="label">¿Llega a viviendas?</span><span class="val" id="statLlega">—</span></div>
-  <div class="row"><span class="label">Tiempo simulado</span><span class="val" id="statTiempo">0 min</span></div>
+<div id="compass" class="tpanel">
+  <i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i>
+  <span class="tag" style="padding:0">VIENTO</span>
+  <div class="ring">
+    <svg viewBox="0 0 56 56">
+      <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(95,227,239,.25)" stroke-width="1"/>
+      <text x="28" y="9" fill="#5fe3ef" font-size="6" font-family="JetBrains Mono" text-anchor="middle">N</text>
+      <text x="28" y="52" fill="#38474c" font-size="6" font-family="JetBrains Mono" text-anchor="middle">S</text>
+      <text x="4" y="30" fill="#38474c" font-size="6" font-family="JetBrains Mono" text-anchor="middle">O</text>
+      <text x="52" y="30" fill="#38474c" font-size="6" font-family="JetBrains Mono" text-anchor="middle">E</text>
+      <g id="compassNeedle" transform="rotate(0 28 28)">
+        <path d="M28 10 L32 28 L28 24 L24 28 Z" fill="#ffb02e"/>
+      </g>
+    </svg>
+  </div>
+  <div class="deg" id="compassDeg">0°</div>
+  <div class="kmh" id="compassKmh">0 KM/H</div>
+</div>
+
+<div id="stats" class="tpanel">
+  <i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i>
+  <div class="hd"><span class="rec"></span>TELEMETRÍA</div>
+  <div class="row"><span class="label">ESCENARIO</span><span class="val" id="statEscenario">BASE</span></div>
+  <div class="row"><span class="label">ÁREA QUEMADA</span><span class="val" id="statHa">0.0 HA</span></div>
+  <div class="row"><span class="label" id="statLlegaLbl">¿LLEGA A VIVIENDAS?</span><span class="val" id="statLlega">—</span></div>
+  <div class="row"><span class="label">T+</span><span class="val" id="statTiempo">00 MIN</span></div>
 </div>
 
 <div id="hud">
-  <div id="timeline" class="panel">
+  <div id="timeline" class="tpanel">
+    <i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i>
     <button class="round" id="btnPlay"><svg class="icon" id="iconPlay"><use href="#i-pause"/></svg></button>
     <input type="range" id="scrub" min="0" max="100" value="0" />
     <span id="timeClock">00:00</span>
   </div>
   <div id="controlsRow">
-    <div id="segmented" class="panel">
+    <div id="segmented" class="tpanel">
+      <i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i>
       <button class="seg active" id="btnBase"><svg class="icon"><use href="#i-flame"/></svg><span>Sin intervención</span></button>
-      <button class="seg" id="btnCortafuegos"><svg class="icon"><use href="#i-shield"/></svg><span>Cortafuegos 250 m</span></button>
+      <button class="seg" id="btnCortafuegos"><svg class="icon"><use href="#i-shield"/></svg><span>Cortafuegos 250m</span></button>
       <button class="seg" id="btnRiesgo"><svg class="icon"><use href="#i-chart"/></svg><span>Mapa de riesgo</span></button>
     </div>
-    <button id="btnStereo" class="panel"><svg class="icon"><use href="#i-phone"/></svg><span>Cardboard</span></button>
-    <button id="btnVR"><svg class="icon"><use href="#i-vr"/></svg><span>Entrar en VR</span></button>
+    <button id="btnStereo" class="tpanel"><i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i><svg class="icon"><use href="#i-phone"/></svg><span>Cardboard</span></button>
+    <button id="btnVR" class="tpanel"><i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i><svg class="icon"><use href="#i-vr"/></svg><span>Iniciar VR</span></button>
   </div>
 </div>
 
-<button id="btnSkipIntro"><span>Saltar intro</span><svg class="icon"><use href="#i-skip"/></svg></button>
-<div id="introCaption"><div class="panel2"><span class="dot"></span><span class="capTxt">Preparando el dron térmico…</span></div></div>
+<button id="btnSkipIntro" class="tpanel"><i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i><span>Saltar</span><svg class="icon"><use href="#i-skip"/></svg></button>
+<div id="introCaption" class="tpanel">
+  <i class="cnr tl"></i><i class="cnr tr"></i><i class="cnr bl"></i><i class="cnr br"></i>
+  <div class="ln"><span class="pfx">&gt;</span><span class="capTxt">DRON-01: preparando sistema…</span><span class="cursor"></span></div>
+</div>
 
-<div id="fallbackNotice">Modo Cardboard manual activo — mueve el celular para mirar alrededor. Toca para salir.</div>
+<div id="fallbackNotice">MODO CARDBOARD ACTIVO — MUEVE EL CELULAR. TOCA PARA SALIR.</div>
 
 <script type="importmap">
 {

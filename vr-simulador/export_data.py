@@ -182,6 +182,11 @@ terreno = {
     "urbano": URBANO.astype(int).tolist(),
     "lineaCortafuegos250": LINEA_250.astype(int).tolist(),
     "ignicion": [int(IGNICION[0]), int(IGNICION[1])],
+    "vientoMs": round(float(V_REF), 2),
+    "vientoKmh": round(float(V_REF) * 3.6, 1),
+    "vientoDirDesde": round(float(DIR_REF), 1),
+    "vientoEtiqueta": "peor día (percentil 95 de ráfagas)",
+    "pH": round(float(P["p_h"]), 3),
 }
 with open(OUT + "terreno.json", "w") as f:
     json.dump(terreno, f, separators=(",", ":"))

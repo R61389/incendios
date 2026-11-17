@@ -54,7 +54,23 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+const BOOT_LINES = [
+  'INICIALIZANDO SISTEMA…',
+  'CARGANDO GRILLA DEL SECTOR CERCADO…',
+  'LEYENDO ELEVACIÓN Y VEGETACIÓN REAL…',
+  'SINCRONIZANDO AUTÓMATA CALIBRADO…',
+  'CARGANDO MAPA DE RIESGO (150 CORRIDAS)…',
+  'ENLAZANDO CON DRON-01…',
+];
+
 async function cargarDatos() {
+  let i = 0;
+  const bootEl = document.getElementById('bootText');
+  const bootTimer = setInterval(() => {
+    i = (i + 1) % BOOT_LINES.length;
+    if (bootEl) bootEl.textContent = BOOT_LINES[i];
+  }, 650);
+
   const [terreno, base, corta, riesgo] = await Promise.all([
     fetch('./data/terreno.json').then((r) => r.json()),
     fetch('./data/fuego_base.json').then((r) => r.json()),
@@ -65,6 +81,8 @@ async function cargarDatos() {
   state.escenarios.base = base;
   state.escenarios.cortafuegos250 = corta;
   state.riesgo = riesgo;
+  clearInterval(bootTimer);
+  if (bootEl) bootEl.textContent = 'SISTEMA LISTO.';
 }
 
 /* ---------------------- construcción de la escena ------------------- */
@@ -358,11 +376,11 @@ function aplicarFrame() {
 
   const ha = haQuemadas * (state.terreno.celda_m ** 2 / 10000);
   const minutos = Math.round(state.frameIdx * (esc.dtMin * esc.pasosGuardadosCada));
-  $('statEscenario').textContent = state.escenarioActual === 'base' ? 'Sin intervención' : 'Con cortafuegos (250 m)';
-  $('statHa').textContent = `${ha.toFixed(1)} ha`;
-  $('statLlega').textContent = llegaBorde ? 'Sí' : 'No';
+  $('statEscenario').textContent = state.escenarioActual === 'base' ? 'SIN INTERVENCIÓN' : 'CORTAFUEGOS 250M';
+  $('statHa').textContent = `${ha.toFixed(1)} HA`;
+  $('statLlegaLbl').textContent = '¿LLEGA A VIVIENDAS?'; $('statLlega').textContent = llegaBorde ? 'SÍ' : 'NO';
   $('statLlega').classList.toggle('on', llegaBorde);
-  $('statTiempo').textContent = `${minutos} min`;
+  $('statTiempo').textContent = `${String(minutos).padStart(2, '0')} MIN`;
   $('timeClock').textContent = `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${String(minutos % 60).padStart(2, '0')}`;
   $('scrub').max = String(esc.frames.length - 1);
   $('scrub').value = String(state.frameIdx);
@@ -400,14 +418,24 @@ function aplicarMapaDeRiesgo(activar) {
   fireMesh.instanceMatrix.needsUpdate = true;
   if (fireMesh.instanceColor) fireMesh.instanceColor.needsUpdate = true;
 
-  $('statEscenario').textContent = 'Mapa de riesgo (Monte Carlo)';
-  $('statHa').textContent = `máx. ${(pmax * 100).toFixed(0)} % de probabilidad`;
-  $('statLlega').textContent = `${state.riesgo.nCorridas} corridas`;
+  $('statEscenario').textContent = 'MAPA DE RIESGO';
+  $('statHa').textContent = `MÁX ${(pmax * 100).toFixed(0)}% PROB.`;
+  $('statLlegaLbl').textContent = 'RÉPLICAS'; $('statLlega').textContent = `${state.riesgo.nCorridas}×MC`;
   $('statLlega').classList.remove('on');
-  $('statTiempo').textContent = '8 h sin control';
+  $('statTiempo').textContent = '8H SIN CTRL';
 }
 
 /* ------------------------------- UI ----------------------------------- */
+
+function poblarBrujula() {
+  const t = state.terreno;
+  const needle = document.getElementById('compassNeedle');
+  if (needle) needle.setAttribute('transform', `rotate(${t.vientoDirDesde || 0} 28 28)`);
+  const deg = document.getElementById('compassDeg');
+  if (deg) deg.textContent = `${Math.round(t.vientoDirDesde || 0)}°`;
+  const kmh = document.getElementById('compassKmh');
+  if (kmh) kmh.textContent = `${(t.vientoKmh ?? 0).toFixed(0)} KM/H`;
+}
 
 function wireUI() {
   $('btnBase').addEventListener('click', () => {
@@ -665,6 +693,7 @@ function finalizarIntro() {
   document.getElementById('hud').classList.add('visible');
   $('stats').classList.add('visible');
   $('brand').classList.add('visible');
+  $('compass').classList.add('visible');
   aplicarFrame();
 }
 
@@ -683,12 +712,12 @@ function actualizarIntro(dt) {
   if (t < 1.1) {
     // despegando: hélices acelerando, cámara fija mirando el dron
     girarHelices(THREE.MathUtils.lerp(2, 55, Math.min(1, t / 1.1)));
-    $('introCaption').querySelector('.capTxt').textContent = 'Preparando el dron térmico…';
+    $('introCaption').querySelector('.capTxt').textContent = 'DRON-01: SISTEMA EN LÍNEA, ARMANDO ROTORES…';
   } else if (t < 2.0) {
     girarHelices(55);
     const u = facilitarSuave((t - 1.1) / 0.9);
     drone.position.y = introState.padPos.y + 0.08 + u * 1.6;
-    $('introCaption').querySelector('.capTxt').textContent = 'Despegando…';
+    $('introCaption').querySelector('.capTxt').textContent = 'DRON-01: DESPEGUE EN CURSO, ALT +1.6M…';
   } else if (t < 6.2) {
     girarHelices(55);
     const u = facilitarSuave((t - 2.0) / 4.2);
@@ -708,7 +737,7 @@ function actualizarIntro(dt) {
     detras.normalize().multiplyScalar(4.2);
     camera.position.lerp(p.clone().add(detras).add(new THREE.Vector3(0, 2.1, 0)), 0.12);
     camera.lookAt(p);
-    $('introCaption').querySelector('.capTxt').textContent = 'Volando hacia la zona del incendio…';
+    $('introCaption').querySelector('.capTxt').textContent = `DRON-01: RUMBO AL FOCO, VIENTO ${Math.round(state.terreno.vientoDirDesde)}°…`;
   } else if (t < 7.8) {
     girarHelices(38);
     drone.position.copy(introState.destino);
@@ -720,7 +749,7 @@ function actualizarIntro(dt) {
     anilloEscaneo.material.opacity = Math.sin(Math.min(1, u) * Math.PI) * 0.8;
     camera.position.lerp(introState.destino.clone().add(new THREE.Vector3(2.6, 2.0, 3.4)), 0.07);
     camera.lookAt(introState.destino);
-    $('introCaption').querySelector('.capTxt').textContent = 'Escaneando el foco con la cámara térmica…';
+    $('introCaption').querySelector('.capTxt').textContent = 'DRON-01: CÁMARA TÉRMICA ACTIVA, ESCANEANDO…';
   } else if (t < 9.4) {
     girarHelices(30);
     const u = facilitarSuave((t - 7.8) / 1.6);
@@ -756,6 +785,7 @@ async function main() {
   construirHumo();
   wireUI();
   setupVR();
+  poblarBrujula();
 
   // Encuadre inicial: mirando hacia el punto de ignición, desde una posición elevada.
   const [ix, iz] = xzDe(state.terreno.ignicion[0], state.terreno.ignicion[1]);
