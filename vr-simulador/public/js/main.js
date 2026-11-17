@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { construirAutomata } from './automata.js';
 
 /* ------------------------------------------------------------------ *
  *  Simulador VR de incendios — Parque Nacional Tunari, sector Cercado
@@ -178,17 +179,20 @@ async function cargarDatos() {
     if (bootEl) bootEl.textContent = BOOT_LINES[i];
   }, 650);
 
-  const [terreno, base, corta, riesgo] = await Promise.all([
+  const [terreno, base, corta, riesgo, parametros] = await Promise.all([
     fetch('./data/terreno.json').then((r) => r.json()),
     fetch('./data/fuego_base.json').then((r) => r.json()),
     fetch('./data/fuego_cortafuegos250.json').then((r) => r.json()),
     fetch('./data/riesgo.json').then((r) => r.json()),
+    fetch('./data/parametros.json').then((r) => r.json()),
     cargarModeloDron(),
   ]);
   state.terreno = terreno;
   state.escenarios.base = base;
   state.escenarios.cortafuegos250 = corta;
   state.riesgo = riesgo;
+  state.parametros = parametros;
+  state.automata = construirAutomata(terreno, parametros);
   clearInterval(bootTimer);
   if (bootEl) bootEl.textContent = 'SISTEMA LISTO.';
 }
@@ -210,7 +214,7 @@ function cargarModeloDron() {
 
 let renderer, scene, camera, controls;
 let fireMesh, smokeSystem, fireParticles;
-let terrainGeo, terrainColorAttr, terrainColorOriginal;
+let terrainGeo, terrainColorAttr, terrainColorOriginal, terrainMesh;
 let lucesIncendio = [];
 let combustibleIdx = []; // [{i,j,x,y,z}]
 let heightAt; // función (i,j)->altura escénica
@@ -345,6 +349,7 @@ function construirTerreno() {
   scene.add(mesh);
 
   terrainGeo = geo;
+  terrainMesh = mesh;
   terrainColorAttr = geo.attributes.color;
   terrainColorOriginal = colores.slice();
 
@@ -897,7 +902,8 @@ function aplicarFrame() {
   const ha = haQuemadas * (state.terreno.celda_m ** 2 / 10000);
   const minutos = Math.round(state.frameIdx * (esc.dtMin * esc.pasosGuardadosCada));
   const minutosTotales = Math.round((esc.frames.length - 1) * (esc.dtMin * esc.pasosGuardadosCada));
-  $('statEscenario').textContent = state.escenarioActual === 'base' ? 'SIN INTERVENCIÓN' : 'CORTAFUEGOS 250M';
+  const ETIQUETA_ESCENARIO = { base: 'SIN INTERVENCIÓN', cortafuegos250: 'CORTAFUEGOS 250M', interactivo: 'INTERACTIVO (PROPIO)' };
+  $('statEscenario').textContent = ETIQUETA_ESCENARIO[state.escenarioActual] ?? state.escenarioActual.toUpperCase();
   $('statHa').textContent = `${ha.toFixed(1)} HA`;
   $('statLlegaLbl').textContent = '¿LLEGA A VIVIENDAS?'; $('statLlega').textContent = llegaBorde ? 'SÍ' : 'NO';
   $('statLlega').classList.toggle('on', llegaBorde);
@@ -1192,6 +1198,120 @@ function setIconoPlay(reproduciendo) {
   $('iconPlay').querySelector('use').setAttribute('href', reproduciendo ? '#i-pause' : '#i-play');
 }
 
+/* --------------- modo interactivo: dibujar cortafuegos + re-simular --------------- */
+// Corre el autómata (automata.js) en el navegador con el viento/humedad que
+// elige el usuario y, si dibujó una línea, con esas celdas bloqueadas. Es un
+// modo "qué pasaría si", separado de los dos escenarios reales/calibrados —
+// no los reemplaza ni los modifica.
+
+let modoDibujo = false;
+let dibujando = false;
+let celdasBloqueadasInteractivo = null; // Uint8Array(n*n)
+let puntosDibujo = []; // [{i,j}]
+let lineaDibujoObj = null;
+const raycasterDibujo = new THREE.Raycaster();
+const punteroDibujo = new THREE.Vector2();
+
+function construirLineaDibujo() {
+  const geo = new THREE.BufferGeometry();
+  const mat = new THREE.LineBasicMaterial({ color: 0xff8a3d, transparent: true, opacity: 0.95, fog: false });
+  lineaDibujoObj = new THREE.Line(geo, mat);
+  lineaDibujoObj.visible = false;
+  lineaDibujoObj.frustumCulled = false;
+  scene.add(lineaDibujoObj);
+}
+
+function actualizarLineaDibujo() {
+  if (!lineaDibujoObj) return;
+  if (puntosDibujo.length < 2) { lineaDibujoObj.visible = false; return; }
+  const pts = puntosDibujo.map((p) => {
+    const [x, z] = xzDe(p.i, p.j);
+    return new THREE.Vector3(x, heightAt(p.i, p.j) + 0.3, z);
+  });
+  lineaDibujoObj.geometry.dispose();
+  lineaDibujoObj.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+  lineaDibujoObj.visible = true;
+}
+
+function reiniciarDibujoCortafuegos() {
+  const n = state.terreno.n;
+  puntosDibujo = [];
+  celdasBloqueadasInteractivo = new Uint8Array(n * n);
+  if (lineaDibujoObj) lineaDibujoObj.visible = false;
+}
+
+function agregarPuntoDesdeEvento(ev) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  punteroDibujo.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  punteroDibujo.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  raycasterDibujo.setFromCamera(punteroDibujo, camera);
+  const hits = raycasterDibujo.intersectObject(terrainMesh, false);
+  if (hits.length === 0) return;
+  const n = state.terreno.n;
+  const j = Math.min(n - 1, Math.max(0, Math.round((hits[0].point.x / WORLD_SIZE + 0.5) * (n - 1))));
+  const i = Math.min(n - 1, Math.max(0, Math.round((hits[0].point.z / WORLD_SIZE + 0.5) * (n - 1))));
+  const k = i * n + j;
+  if (!celdasBloqueadasInteractivo[k] && state.terreno.clase[i][j] !== 50) {
+    celdasBloqueadasInteractivo[k] = 1;
+    puntosDibujo.push({ i, j });
+    actualizarLineaDibujo();
+    $('piEstado').textContent = `Dibujando: ${puntosDibujo.length} celdas marcadas. Soltá y tocá "Simular" cuando termines.`;
+  }
+}
+
+function salirDeModoDibujo() {
+  modoDibujo = false; dibujando = false;
+  if (controls) controls.enabled = true;
+  $('btnDibujarCorta').classList.remove('activo');
+}
+
+function mostrarPanelInteractivo(mostrar) {
+  $('panelInteractivo').classList.toggle('visible', mostrar);
+  $('veredicto').style.display = mostrar ? 'none' : '';
+  $('fuentes').style.display = mostrar ? 'none' : '';
+  if (!mostrar) salirDeModoDibujo();
+}
+
+function actualizarEtiquetasInteractivo() {
+  $('viDirVal').textContent = `${$('viDir').value}°`;
+  $('viVelVal').textContent = `${$('viVel').value} km/h`;
+  $('viHumVal').textContent = `${$('viHum').value}%`;
+}
+
+function correrSimulacionInteractiva() {
+  const btn = $('btnSimularInteractivo');
+  btn.disabled = true;
+  $('piEstado').textContent = 'Simulando con el autómata calibrado (en tu navegador)…';
+  setTimeout(() => {
+    const n = state.terreno.n;
+    const estadoInicial = state.automata.COMBUSTIBLE.slice();
+    if (celdasBloqueadasInteractivo) {
+      for (let k = 0; k < n * n; k++) if (celdasBloqueadasInteractivo[k]) estadoInicial[k] = 0;
+    }
+    const vientoMs = Number($('viVel').value) / 3.6;
+    const dirDesde = Number($('viDir').value);
+    const humedadPct = Number($('viHum').value);
+    const maxPasos = Math.round(8 * 60 / state.parametros.minutosPorPaso);
+    const frames = state.automata.simular({
+      ignicionI: state.terreno.ignicion[0], ignicionJ: state.terreno.ignicion[1],
+      vientoMs, dirDesde, humedadPct, maxPasos, estadoInicial, guardarCada: 4,
+    });
+    state.escenarios.interactivo = {
+      nombre: 'interactivo', dtMin: state.parametros.minutosPorPaso, pasosGuardadosCada: 4,
+      numFrames: frames.length, frames,
+    };
+    state.escenarioActual = 'interactivo';
+    state.frameIdx = 0;
+    state.modoRiesgo = false;
+    fireMesh.visible = false;
+    aplicarFrame();
+    state.playing = true; setIconoPlay(true);
+    btn.disabled = false;
+    const haFinal = frames[frames.length - 1].flat().filter((v) => v >= 2).length * (state.terreno.celda_m ** 2 / 10000);
+    $('piEstado').textContent = `Listo: ${haFinal.toFixed(1)} ha quemadas en ${frames.length} cuadros, con ${$('viVelVal').textContent} desde ${$('viDirVal').textContent} y ${$('viHumVal').textContent} de humedad.`;
+  }, 30);
+}
+
 function wireUI() {
   $('veredictoToggle').addEventListener('click', () => {
     $('veredicto').classList.toggle('expanded');
@@ -1204,19 +1324,23 @@ function wireUI() {
   });
   $('btnBase').addEventListener('click', () => {
     state.escenarioActual = 'base'; state.frameIdx = 0; state.modoRiesgo = false;
-    $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active');
+    $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active');
+    mostrarPanelInteractivo(false);
     ocultarCortafuegosViz();
     aplicarFrame();
   });
   $('btnCortafuegos').addEventListener('click', () => {
     state.escenarioActual = 'cortafuegos250'; state.frameIdx = 0; state.modoRiesgo = false;
-    $('btnCortafuegos').classList.add('active'); $('btnBase').classList.remove('active'); $('btnRiesgo').classList.remove('active');
+    $('btnCortafuegos').classList.add('active'); $('btnBase').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active');
+    mostrarPanelInteractivo(false);
     aplicarFrame();
     iniciarAnimCortafuegos();
   });
   $('btnRiesgo').addEventListener('click', () => {
     const activar = !state.modoRiesgo;
     $('btnRiesgo').classList.toggle('active', activar);
+    $('btnInteractivo').classList.remove('active');
+    mostrarPanelInteractivo(false);
     if (activar) {
       ocultarCortafuegosViz();
     } else if (state.escenarioActual === 'cortafuegos250') {
@@ -1224,6 +1348,38 @@ function wireUI() {
     }
     aplicarMapaDeRiesgo(activar);
   });
+  $('btnInteractivo').addEventListener('click', () => {
+    $('btnBase').classList.remove('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active');
+    $('btnInteractivo').classList.add('active');
+    if (state.modoRiesgo) aplicarMapaDeRiesgo(false);
+    ocultarCortafuegosViz();
+    mostrarPanelInteractivo(true);
+  });
+  $('viDir').addEventListener('input', actualizarEtiquetasInteractivo);
+  $('viVel').addEventListener('input', actualizarEtiquetasInteractivo);
+  $('viHum').addEventListener('input', actualizarEtiquetasInteractivo);
+  $('btnDibujarCorta').addEventListener('click', () => {
+    modoDibujo = !modoDibujo;
+    $('btnDibujarCorta').classList.toggle('activo', modoDibujo);
+    if (!modoDibujo) { dibujando = false; controls.enabled = true; }
+  });
+  $('btnLimpiarCorta').addEventListener('click', () => reiniciarDibujoCortafuegos());
+  $('btnSimularInteractivo').addEventListener('click', correrSimulacionInteractiva);
+
+  renderer.domElement.addEventListener('pointerdown', (ev) => {
+    if (!modoDibujo) return;
+    ev.preventDefault();
+    dibujando = true;
+    controls.enabled = false;
+    reiniciarDibujoCortafuegos();
+    agregarPuntoDesdeEvento(ev);
+  });
+  renderer.domElement.addEventListener('pointermove', (ev) => {
+    if (!modoDibujo || !dibujando) return;
+    ev.preventDefault();
+    agregarPuntoDesdeEvento(ev);
+  });
+  window.addEventListener('pointerup', () => { dibujando = false; });
   $('btnPlay').addEventListener('click', () => {
     state.playing = !state.playing;
     setIconoPlay(state.playing);
@@ -1706,6 +1862,7 @@ async function main() {
   calcularAnalisis();
   pintarVeredicto();
   construirLineaCortafuegosViz();
+  construirLineaDibujo();
   construirVegetacion();
   construirOverlayDeFuego();
   construirHumo();

@@ -187,6 +187,7 @@ terreno = {
     "elevacion": np.round(ELEV, 1).tolist(),
     "clase": CLASE.tolist(),
     "urbano": URBANO.astype(int).tolist(),
+    "densidadAjuste": np.round(DENS, 2).tolist(),
     "lineaCortafuegos250": LINEA_250.astype(int).tolist(),
     "ignicion": [int(IGNICION[0]), int(IGNICION[1])],
     "vientoMs": round(float(V_REF), 2),
@@ -205,6 +206,26 @@ terreno = {
 }
 with open(OUT + "terreno.json", "w") as f:
     json.dump(terreno, f, separators=(",", ":"))
+
+# --- parámetros reales del autómata (para el modo interactivo: re-simular en el
+# navegador con viento/humedad que el usuario cambia, usando los MISMOS
+# coeficientes calibrados — fuente: parametros_modelo.csv, informe sección 10) ---
+parametros = {
+    "pH": round(float(P["p_h"]), 4),
+    "a": round(float(P["a"]), 4),
+    "c1": round(float(P["c1"]), 4),
+    "c2": round(float(P["c2"]), 4),
+    "pVeg": {"10": P["p_veg_arborea"], "20": P["p_veg_matorral"], "30": P["p_veg_pastizal"], "40": P["p_veg_cultivo"]},
+    "tamanoCeldaM": P["tamano_celda_m"],
+    "minutosPorPaso": P["minutos_por_paso"],
+    "sSalto": P["s_salto"],
+    "pasosArdiendo": int(P["pasos_ardiendo"]),
+    "pasosArdiendoArborea": int(P["pasos_ardiendo_arborea"]),
+    "humedadRefPct": round(float(fila_peor.relative_humidity_2m), 0),
+}
+with open(OUT + "parametros.json", "w") as f:
+    json.dump(parametros, f, separators=(",", ":"))
+print(f"  parametros.json: {os.path.getsize(OUT + 'parametros.json')} bytes")
 
 DT = P["minutos_por_paso"]
 

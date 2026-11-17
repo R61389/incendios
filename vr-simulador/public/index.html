@@ -198,6 +198,39 @@
   #fuentes .vSub b { color: var(--text); }
   #fuentes .vSub div + div { margin-top: 5px; }
 
+  /* ---------- modo interactivo: viento/humedad propios + dibujar cortafuegos ---------- */
+  #panelInteractivo {
+    display: none; pointer-events: auto; width: min(560px, 94vw); padding: 10px 14px 12px;
+    font-family: var(--mono); --cnc: var(--amber); --cut: 11px;
+  }
+  #panelInteractivo.visible { display: block; }
+  #panelInteractivo .hd {
+    font-size: 9.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--amber);
+    display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 8px;
+  }
+  #panelInteractivo .hd svg.icon { fill: var(--amber); }
+  .piGrid { display: flex; flex-direction: column; gap: 7px; }
+  .piCtrl label {
+    display: flex; justify-content: space-between; font-size: 9.5px; color: var(--text-dim);
+    letter-spacing: .03em; text-transform: uppercase; margin-bottom: 2px;
+  }
+  .piCtrl label b { color: var(--amber); font-weight: 700; }
+  .piCtrl input[type=range] { width: 100%; accent-color: var(--amber); height: 2px; margin: 0; }
+  .piBtns { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
+  .piBtns button {
+    pointer-events: auto; flex: 1 1 auto; min-width: 118px; border: none; font-family: var(--mono);
+    font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; cursor: pointer;
+    color: var(--text-dim); background: rgba(255,255,255,.05); padding: 8px 10px; --cut: 9px; --cnc: var(--line-strong);
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .piBtns button svg.icon { width: 12px; height: 12px; fill: var(--text-dim); }
+  #btnDibujarCorta.activo { color: var(--cyan); background: rgba(95,227,239,.14); --cnc: var(--cyan); }
+  #btnDibujarCorta.activo svg.icon { fill: var(--cyan); }
+  #btnSimularInteractivo { color: var(--amber); background: rgba(255,176,46,.14); --cnc: var(--amber); }
+  #btnSimularInteractivo svg.icon { fill: var(--amber); }
+  #btnSimularInteractivo:disabled { opacity: .5; cursor: default; }
+  .piEstado { margin-top: 9px; font-size: 9.5px; color: var(--text-dim); line-height: 1.4; }
+
   #timeline {
     pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 16px 7px 7px;
     width: min(560px, 94vw); --cnc: var(--cyan); --cut: 11px;
@@ -364,6 +397,7 @@
     <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></symbol>
     <symbol id="i-skip" viewBox="0 0 24 24"><path d="M6 5v14l9-7z"/><rect x="16.5" y="5" width="2.4" height="14" rx="1"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5.5A3.5 3.5 0 0 0 12 15z"/><path d="M19 11.5a7 7 0 0 1-14 0H3.3a8.7 8.7 0 0 0 7.9 8.65V22h1.6v-1.85a8.7 8.7 0 0 0 7.9-8.65H19z"/></symbol>
+    <symbol id="i-draw" viewBox="0 0 24 24"><path d="M3 21l1.1-4.6 4.5 4.5zm2.2-6l12-12 3.8 3.8-12 12z"/></symbol>
   </defs>
 </svg>
 
@@ -422,6 +456,31 @@
 </div>
 
 <div id="hud">
+  <div id="panelInteractivo" class="tpanel">
+    <div class="hd">
+      <svg class="icon"><use href="#i-draw"/></svg>MODO INTERACTIVO — simulación propia, no calibrada
+    </div>
+    <div class="piGrid">
+      <div class="piCtrl">
+        <label>VIENTO DESDE <b id="viDirVal">0°</b></label>
+        <input type="range" id="viDir" min="0" max="359" step="1" value="0" />
+      </div>
+      <div class="piCtrl">
+        <label>VELOCIDAD <b id="viVelVal">35 km/h</b></label>
+        <input type="range" id="viVel" min="0" max="110" step="1" value="35" />
+      </div>
+      <div class="piCtrl">
+        <label>HUMEDAD DEL AIRE <b id="viHumVal">25%</b></label>
+        <input type="range" id="viHum" min="5" max="90" step="1" value="25" />
+      </div>
+    </div>
+    <div class="piBtns">
+      <button id="btnDibujarCorta" class="tpanel"><svg class="icon"><use href="#i-draw"/></svg><span>Dibujar cortafuegos</span></button>
+      <button id="btnLimpiarCorta" class="tpanel"><span>Borrar línea</span></button>
+      <button id="btnSimularInteractivo" class="tpanel"><svg class="icon"><use href="#i-play"/></svg><span>Simular</span></button>
+    </div>
+    <div class="piEstado" id="piEstado">Arrastra sobre el terreno (con "Dibujar cortafuegos" activo) para trazar tu propia línea de corte, ajusta el viento/humedad y toca "Simular".</div>
+  </div>
   <div id="veredicto" class="tpanel">
     <button type="button" class="vHead" id="veredictoToggle" title="Toca para ver el detalle">
       <svg class="icon"><use href="#i-shield"/></svg>
@@ -443,6 +502,7 @@
       <div><b>Cortafuegos 250m:</b> franja real a 250 m del borde urbano (clase_esa = 50 + distancia).</div>
       <div><b>Viento / clima:</b> meteo_tunari_epoca_seca_2023_2026.csv — percentil 95 de wind_gusts_10m ("peor día"); humedad y temperatura del registro real más cercano a ese percentil.</div>
       <div><b>Mapa de riesgo:</b> 150 corridas Monte Carlo del mismo autómata, con focos_firms_tunari_2020_2025.csv para elegir puntos de ignición realistas.</div>
+      <div><b>Modo interactivo:</b> corre el mismo autómata y los mismos coeficientes calibrados (p_h, a, c1, c2, vegetación) directamente en tu navegador (js/automata.js), pero con el viento/humedad que elijas y el cortafuegos que dibujes — es una simulación propia tuya, no una corrida validada contra el incendio real. La humedad no estaba en el modelo original de Alexandridis et al.; se agregó un factor simple y declarado para que el control tenga efecto (ver comentario en automata.js).</div>
       <div><b>Vegetación quemada por tipo:</b> columna clase_esa (10 arbórea, 20 matorral, 30 pastizal, 40 cultivo). El CSV no trae número de plantas individuales, solo tipo y densidad cualitativa por celda de 25×25 m — por eso se muestra en celdas/hectáreas, no en "plantas".</div>
     </div>
   </div>
@@ -456,6 +516,7 @@
       <button class="seg active" id="btnBase"><svg class="icon"><use href="#i-flame"/></svg><span>Sin intervención</span></button>
       <button class="seg" id="btnCortafuegos"><svg class="icon"><use href="#i-shield"/></svg><span>Cortafuegos 250m</span></button>
       <button class="seg" id="btnRiesgo"><svg class="icon"><use href="#i-chart"/></svg><span>Mapa de riesgo</span></button>
+      <button class="seg" id="btnInteractivo"><svg class="icon"><use href="#i-draw"/></svg><span>Interactivo</span></button>
     </div>
     <button id="btnVoz" class="tpanel"><svg class="icon"><use href="#i-mic"/></svg><span>Voz</span></button>
     <button id="btnStereo" class="tpanel"><svg class="icon"><use href="#i-phone"/></svg><span>Cardboard</span></button>
