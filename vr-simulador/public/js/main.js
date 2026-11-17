@@ -36,7 +36,6 @@ function ruidoFBM(x, y) {
   return ruidoSuave(x, y) * 0.55 + ruidoSuave(x * 2.6, y * 2.6) * 0.3 + ruidoSuave(x * 7.1, y * 7.1) * 0.15;
 }
 const COLOR_EN_LLAMAS = new THREE.Color(0xff6a1a);
-const COLOR_QUEMADA = new THREE.Color(0x2a1812);
 const COLOR_CORTAFUEGOS = new THREE.Color(0x3a3a3a);
 
 /* ------------------- texturas procedurales del terreno -------------------
@@ -790,6 +789,7 @@ function colorRiesgo(p) {
 
 let estadoFuegoAnterior = null; // Uint8Array(combustibleIdx.length): 1 si la celda ya estaba ardiendo (v===2) en el frame anterior
 let fuegoVisualHasta = null; // Float32Array(combustibleIdx.length): hasta qué momento (relojFuego) se la sigue mostrando en llamas
+let totalPorClase = null; // { 10,20,30,40: total de celdas combustibles reales de cada tipo, para calcular % de afectación
 
 // Cada frame guardado representa varios pasos reales del autómata (ver
 // pasosGuardadosCada/dtMin); una celda de pajonal arde solo 4 pasos (12 min
@@ -799,7 +799,7 @@ let fuegoVisualHasta = null; // Float32Array(combustibleIdx.length): hasta qué 
 // parte VISUAL (llamas/humo/luces) se mantiene encendida un mínimo de tiempo
 // real aunque el dato ya haya pasado a "ceniza"; el dato de hectáreas/tiempo
 // quemado no cambia, solo se alarga cuánto se ve arder.
-const DURACION_VISUAL_FUEGO = 1.3;
+const DURACION_VISUAL_FUEGO = 4.5;
 
 function aplicarFrame() {
   const esc = state.escenarios[state.escenarioActual];
@@ -822,6 +822,13 @@ function aplicarFrame() {
   // por celda de 25×25 m, no un número de plantas individuales.
   const porClase = { 10: 0, 20: 0, 30: 0, 40: 0 };
   const clase = state.terreno.clase;
+  if (!totalPorClase) {
+    totalPorClase = { 10: 0, 20: 0, 30: 0, 40: 0 };
+    for (let k = 0; k < combustibleIdx.length; k++) {
+      const c = clase[combustibleIdx[k].i][combustibleIdx[k].j];
+      totalPorClase[c] = (totalPorClase[c] || 0) + 1;
+    }
+  }
 
   state.celdasEnLlamas = [];
   for (let k = 0; k < combustibleIdx.length; k++) {
@@ -850,8 +857,18 @@ function aplicarFrame() {
           state.celdasEnLlamas.push({ x, y, z });
         }
       }
-      // terreno "quemado": se oscurece in situ (ceniza), sin cubos superpuestos
-      color.copy(COLOR_QUEMADA);
+      // terreno "quemado": se oscurece in situ, pero a partir del color real de
+      // esa celda (no un negro plano) — conserva algo de la textura/relieve de
+      // abajo y varía un poco con ruido, como ceniza/carbón real, no un bloque
+      // sólido uniforme.
+      const orR = terrainColorOriginal[idxVert * 3], orG = terrainColorOriginal[idxVert * 3 + 1], orB = terrainColorOriginal[idxVert * 3 + 2];
+      const ruidoCeniza = ruidoFBM(i * 0.22 + 50, j * 0.22 + 50);
+      const factor = 0.14 + ruidoCeniza * 0.12;
+      color.setRGB(
+        Math.min(1, orR * factor + 0.03),
+        Math.min(1, orG * factor * 0.82),
+        Math.min(1, orB * factor * 0.78),
+      );
       terrainColorAttr.setXYZ(idxVert, color.r, color.g, color.b);
       actualizarVegetacionCelda(k, true);
     } else {
@@ -887,9 +904,12 @@ function aplicarFrame() {
   $('statTiempo').textContent = `${String(minutos).padStart(2, '0')} MIN`;
   $('statDuracion').textContent = formatearDuracion(minutosTotales);
   const celdaHa = state.terreno.celda_m ** 2 / 10000;
-  $('statArborea').textContent = `${porClase[10]} CELDAS (${(porClase[10] * celdaHa).toFixed(1)} HA)`;
+  const pctArborea = totalPorClase[10] ? (porClase[10] / totalPorClase[10]) * 100 : 0;
+  $('statArborea').textContent = `${porClase[10]} CELDAS (${(porClase[10] * celdaHa).toFixed(1)} HA) · ${pctArborea.toFixed(0)}%`;
   const otras = porClase[20] + porClase[30] + porClase[40];
-  $('statOtraVeg').textContent = `${otras} CELDAS (${(otras * celdaHa).toFixed(1)} HA)`;
+  const totalOtras = totalPorClase[20] + totalPorClase[30] + totalPorClase[40];
+  const pctOtras = totalOtras ? (otras / totalOtras) * 100 : 0;
+  $('statOtraVeg').textContent = `${otras} CELDAS (${(otras * celdaHa).toFixed(1)} HA) · ${pctOtras.toFixed(0)}%`;
   $('timeClock').textContent = `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${String(minutos % 60).padStart(2, '0')}`;
   $('scrub').max = String(esc.frames.length - 1);
   $('scrub').value = String(state.frameIdx);
