@@ -186,6 +186,9 @@ async function cargarDatos() {
     fetch('./data/riesgo.json').then((r) => r.json()),
     fetch('./data/parametros.json').then((r) => r.json()),
     cargarModeloDron(),
+    cargarModeloGLB('./models/vivienda.glb').then((m) => { modeloVivienda = m; }),
+    cargarModeloGLB('./models/avicola.glb').then((m) => { modeloAvicola = m; }),
+    cargarModeloGLB('./models/camion_bomberos.glb').then((m) => { modeloCamion = m; }),
   ]);
   state.terreno = terreno;
   state.escenarios.base = base;
@@ -207,6 +210,17 @@ function cargarModeloDron() {
       undefined,
       (err) => { console.warn('No se pudo cargar el modelo del dron, se usa el procedural:', err); resolve(); },
     );
+  });
+}
+
+/* ------------------- modelos 3D reales: vivienda, avícola, camión ------------------- */
+let modeloVivienda = null, modeloAvicola = null, modeloCamion = null;
+function cargarModeloGLB(ruta) {
+  return new Promise((resolve) => {
+    new GLTFLoader().load(ruta, (gltf) => resolve(gltf.scene), undefined, (err) => {
+      console.warn(`No se pudo cargar ${ruta}:`, err);
+      resolve(null);
+    });
   });
 }
 
@@ -819,7 +833,7 @@ function aplicarFrame() {
     estadoFuegoAnterior = new Uint8Array(combustibleIdx.length);
     fuegoVisualHasta = new Float32Array(combustibleIdx.length);
   }
-  if (state.frameIdx === 0) { estadoFuegoAnterior.fill(0); fuegoVisualHasta.fill(0); }
+  if (state.frameIdx === 0) { estadoFuegoAnterior.fill(0); fuegoVisualHasta.fill(0); reiniciarEstructuras(); }
 
   // celdas quemadas por tipo de vegetación real (clase_esa de la grilla): es
   // el conteo más cercano a "plantas afectadas" que da el dato real — el CSV
@@ -843,8 +857,13 @@ function aplicarFrame() {
     if (v === 2 || v === 3) {
       haQuemadas++;
       porClase[clase[i][j]] = (porClase[clase[i][j]] || 0) + 1;
+      const [x, z] = xzDe(i, j);
+      // cualquier celda que haya ardido (v===2 ahora o v===3 ya consumida) puede
+      // haber dañado una estructura cercana — se chequea siempre, no solo en el
+      // instante exacto del fuego, para que sea igual de correcto si el usuario
+      // reproduce normal o salta directo con la barra de tiempo.
+      verificarDanioEstructuras(x, z);
       if (v === 2) {
-        const [x, z] = xzDe(i, j);
         const y = heightAt(i, j);
         state.celdasEnLlamas.push({ x, y, z });
         fuegoVisualHasta[k] = relojFuego + DURACION_VISUAL_FUEGO;
@@ -857,7 +876,6 @@ function aplicarFrame() {
         // ya es ceniza en el dato, pero todavía dentro del mínimo visual: se
         // sigue viendo arder (sin disparar otra ráfaga de ignición)
         if (fuegoVisualHasta[k] > relojFuego) {
-          const [x, z] = xzDe(i, j);
           const y = heightAt(i, j);
           state.celdasEnLlamas.push({ x, y, z });
         }
@@ -1717,6 +1735,79 @@ function construirDron() {
   scene.add(anilloEscaneo);
 }
 
+/* ------------- estructuras reales: vivienda, avícola, camión de bomberos ------------- */
+// Ubicadas en celdas urbanas reales que el fuego SÍ alcanza en el escenario
+// "sin intervención" (donde ¿llega a viviendas? = sí) — así se ve de verdad
+// cómo el incendio les llega, como pasó con las 2 cabañas y la granja
+// avícola del incendio real del 12/08/2026 que calibra el modelo.
+const estructurasColocadas = []; // [{ i, j, obj, meshes, radioDanio, danada }]
+
+function colocarEstructura(modeloGLTF, i, j, anchoDeseado, rotacionYGrados, radioDanio) {
+  if (!modeloGLTF) return null;
+  const modelo = modeloGLTF.clone(true);
+  const meshes = [];
+  modelo.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = false; o.receiveShadow = false; // mallas reales pesadas, mismo criterio que el dron
+      if (o.material) {
+        o.material = o.material.clone();
+        o.userData.colorOriginal = o.material.color ? o.material.color.clone() : null;
+      }
+      meshes.push(o);
+    }
+  });
+  const caja = new THREE.Box3().setFromObject(modelo);
+  const tam = new THREE.Vector3(); caja.getSize(tam);
+  const centro = new THREE.Vector3(); caja.getCenter(centro);
+  const escala = anchoDeseado / Math.max(tam.x, tam.z);
+  modelo.position.sub(centro);
+  const contenedor = new THREE.Group();
+  contenedor.add(modelo);
+  contenedor.scale.setScalar(escala);
+  contenedor.rotation.y = THREE.MathUtils.degToRad(rotacionYGrados);
+  const [x, z] = xzDe(i, j);
+  contenedor.position.set(x, heightAt(i, j) + (tam.y * escala) / 2, z);
+  scene.add(contenedor);
+  const entrada = { i, j, obj: contenedor, meshes, radioDanio, danada: false };
+  estructurasColocadas.push(entrada);
+  return entrada;
+}
+
+function reiniciarEstructuras() {
+  for (const e of estructurasColocadas) {
+    if (!e.danada) continue;
+    e.danada = false;
+    for (const m of e.meshes) {
+      if (m.material.color && m.userData.colorOriginal) m.material.color.copy(m.userData.colorOriginal);
+      if (m.material.emissive) m.material.emissive.setRGB(0, 0, 0);
+    }
+  }
+}
+
+function construirEstructurasReales() {
+  colocarEstructura(modeloVivienda, 74, 35, 1.5, 25, 2.5);
+  colocarEstructura(modeloAvicola, 78, 40, 2.3, -20, 2.5);
+  colocarEstructura(modeloCamion, 82, 40, 1.05, 160, 0); // el camión no se "quema": llega a apoyar
+}
+
+// Se llama desde aplicarFrame() por cada celda en llamas (v===2); si cae
+// dentro del radio de una estructura todavía sana, la "daña" una sola vez:
+// destello de ignición + materiales ennegrecidos, igual que el terreno.
+function verificarDanioEstructuras(x, z) {
+  for (const e of estructurasColocadas) {
+    if (e.danada || !e.radioDanio) continue;
+    const [ex, ez] = xzDe(e.i, e.j);
+    if ((x - ex) ** 2 + (z - ez) ** 2 <= e.radioDanio ** 2) {
+      e.danada = true;
+      dispararRafagaIgnicion(ex, e.obj.position.y + 0.3, ez);
+      for (const m of e.meshes) {
+        if (m.material.color) m.material.color.multiplyScalar(0.22);
+        if (m.material.emissive) m.material.emissive.setRGB(0.12, 0.03, 0.01);
+      }
+    }
+  }
+}
+
 function construirPad(pos) {
   const base = new THREE.Mesh(
     new THREE.CylinderGeometry(1.1, 1.2, 0.12, 20),
@@ -1863,6 +1954,7 @@ async function main() {
   pintarVeredicto();
   construirLineaCortafuegosViz();
   construirLineaDibujo();
+  construirEstructurasReales();
   construirVegetacion();
   construirOverlayDeFuego();
   construirHumo();
