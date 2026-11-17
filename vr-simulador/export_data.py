@@ -170,6 +170,13 @@ print(f"Escenario base: {len(cuadros_base)} cuadros, final {int((cuadros_base[-1
 print(f"Escenario cortafuegos: {len(cuadros_corta)} cuadros, final {int((cuadros_corta[-1] >= 2).sum() * HA_CELDA)} ha, "
       f"¿llegó al borde urbano? {bool(((cuadros_corta[-1] >= 2) & BORDE).any())}")
 
+# --- condiciones ambientales reales del "peor día" (misma referencia que el viento) ---
+# Para no inventar humedad/temperatura, se toma el registro real del CSV de clima
+# cuya ráfaga está más cerca del percentil 95 usado para el viento del modelo —
+# así los datos que se muestran corresponden a una observación real, no a un promedio.
+gust_p95 = np.percentile(meteo.wind_gusts_10m, 95)
+fila_peor = meteo.loc[(meteo.wind_gusts_10m - gust_p95).abs().idxmin()]
+
 # --- exportar terreno ---
 elev_min, elev_max = float(ELEV.min()), float(ELEV.max())
 terreno = {
@@ -187,6 +194,14 @@ terreno = {
     "vientoDirDesde": round(float(DIR_REF), 1),
     "vientoEtiqueta": "peor día (percentil 95 de ráfagas)",
     "pH": round(float(P["p_h"]), 3),
+    "clima": {
+        "temporadaAnio": int(fila_peor.temporada),
+        "temporadaEtiqueta": "Época seca",
+        "fecha": str(fila_peor.time.date()),
+        "temperaturaC": round(float(fila_peor.temperature_2m), 1),
+        "humedadPct": round(float(fila_peor.relative_humidity_2m), 0),
+        "precipMm": round(float(fila_peor.precipitation), 1),
+    },
 }
 with open(OUT + "terreno.json", "w") as f:
     json.dump(terreno, f, separators=(",", ":"))

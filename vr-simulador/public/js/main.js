@@ -851,11 +851,13 @@ function aplicarFrame() {
 
   const ha = haQuemadas * (state.terreno.celda_m ** 2 / 10000);
   const minutos = Math.round(state.frameIdx * (esc.dtMin * esc.pasosGuardadosCada));
+  const minutosTotales = Math.round((esc.frames.length - 1) * (esc.dtMin * esc.pasosGuardadosCada));
   $('statEscenario').textContent = state.escenarioActual === 'base' ? 'SIN INTERVENCIÓN' : 'CORTAFUEGOS 250M';
   $('statHa').textContent = `${ha.toFixed(1)} HA`;
   $('statLlegaLbl').textContent = '¿LLEGA A VIVIENDAS?'; $('statLlega').textContent = llegaBorde ? 'SÍ' : 'NO';
   $('statLlega').classList.toggle('on', llegaBorde);
   $('statTiempo').textContent = `${String(minutos).padStart(2, '0')} MIN`;
+  $('statDuracion').textContent = formatearDuracion(minutosTotales);
   $('timeClock').textContent = `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${String(minutos % 60).padStart(2, '0')}`;
   $('scrub').max = String(esc.frames.length - 1);
   $('scrub').value = String(state.frameIdx);
@@ -900,6 +902,13 @@ function aplicarMapaDeRiesgo(activar) {
   $('statLlegaLbl').textContent = 'RÉPLICAS'; $('statLlega').textContent = `${state.riesgo.nCorridas}×MC`;
   $('statLlega').classList.remove('on');
   $('statTiempo').textContent = '8H SIN CTRL';
+  $('statDuracion').textContent = '—';
+}
+
+function formatearDuracion(minutosTotales) {
+  const h = Math.floor(minutosTotales / 60);
+  const m = minutosTotales % 60;
+  return h > 0 ? `${h} H ${String(m).padStart(2, '0')} MIN` : `${m} MIN`;
 }
 
 /* ------------- análisis comparativo: qué estrategia es mejor ------------ */
@@ -964,9 +973,9 @@ function pintarVeredicto() {
     txt.innerHTML = `⚠ EL CORTAFUEGOS NO MEJORA EL RESULTADO EN ESTA CORRIDA`;
   }
   sub.textContent =
-    `Sin intervención: ${a.base.ha.toFixed(1)} ha quemadas` +
+    `Sin intervención: ${a.base.ha.toFixed(1)} ha quemadas en ${formatearDuracion(a.base.minutos)}` +
     (a.base.llegaBorde ? ' (llega a viviendas)' : '') +
-    ` · Con cortafuegos: ${a.corta.ha.toFixed(1)} ha` +
+    ` · Con cortafuegos: ${a.corta.ha.toFixed(1)} ha en ${formatearDuracion(a.corta.minutos)}` +
     (a.corta.llegaBorde ? ' (llega a viviendas)' : ' (no llega a viviendas)') +
     ` · Riesgo base de la zona (150 corridas MC): ${a.pctAltoRiesgo.toFixed(0)}% de las celdas combustibles con más de 50% de probabilidad de quemarse.`;
 }
@@ -1112,7 +1121,17 @@ function poblarBrujula() {
   const deg = document.getElementById('compassDeg');
   if (deg) deg.textContent = `${Math.round(t.vientoDirDesde || 0)}°`;
   const kmh = document.getElementById('compassKmh');
-  if (kmh) kmh.textContent = `${(t.vientoKmh ?? 0).toFixed(0)} KM/H`;
+  if (kmh) kmh.textContent = `${(t.vientoKmh ?? 0).toFixed(0)} KM/H VIENTO`;
+
+  // condiciones ambientales reales del "peor día" (export_data.py: registro
+  // climático real más cercano al percentil 95 de ráfaga usado por el modelo)
+  const c = t.clima;
+  if (c) {
+    $('envHumedad').textContent = `${c.humedadPct.toFixed(0)}%`;
+    $('envTemp').textContent = `${c.temperaturaC.toFixed(1)}°C`;
+    $('envClima').textContent = `${c.temporadaEtiqueta} ${c.temporadaAnio}`;
+    $('envFecha').textContent = c.fecha;
+  }
 }
 
 function wireUI() {
