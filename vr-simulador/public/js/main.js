@@ -196,6 +196,13 @@ async function cargarDatos() {
   state.riesgo = riesgo;
   state.parametros = parametros;
   state.automata = construirAutomata(terreno, parametros);
+  // máscara plana de la franja real a 250 m (export_data.py: lineaCortafuegos250),
+  // para el ataque indirecto del modo "dron + cuadrillas"
+  const nn = terreno.n;
+  lineaCortafuegos250Flat = new Uint8Array(nn * nn);
+  for (let i = 0; i < nn; i++) {
+    for (let j = 0; j < nn; j++) lineaCortafuegos250Flat[i * nn + j] = terreno.lineaCortafuegos250[i][j];
+  }
   clearInterval(bootTimer);
   if (bootEl) bootEl.textContent = 'SISTEMA LISTO.';
 }
@@ -232,6 +239,7 @@ let terrainGeo, terrainColorAttr, terrainColorOriginal, terrainMesh;
 let lucesIncendio = [];
 let combustibleIdx = []; // [{i,j,x,y,z}]
 let heightAt; // función (i,j)->altura escénica
+let lineaCortafuegos250Flat = null; // Uint8Array N*N: franja real a 250 m (ver cargarDatos)
 
 let nubes = [];
 
@@ -920,7 +928,7 @@ function aplicarFrame() {
   const ha = haQuemadas * (state.terreno.celda_m ** 2 / 10000);
   const minutos = Math.round(state.frameIdx * (esc.dtMin * esc.pasosGuardadosCada));
   const minutosTotales = Math.round((esc.frames.length - 1) * (esc.dtMin * esc.pasosGuardadosCada));
-  const ETIQUETA_ESCENARIO = { base: 'SIN INTERVENCIÓN', cortafuegos250: 'CORTAFUEGOS 250M', interactivo: 'INTERACTIVO (PROPIO)' };
+  const ETIQUETA_ESCENARIO = { base: 'SIN INTERVENCIÓN', cortafuegos250: 'CORTAFUEGOS 250M', interactivo: 'INTERACTIVO (PROPIO)', cuadrillas: 'DRON + CUADRILLAS' };
   $('statEscenario').textContent = ETIQUETA_ESCENARIO[state.escenarioActual] ?? state.escenarioActual.toUpperCase();
   $('statHa').textContent = `${ha.toFixed(1)} HA`;
   $('statLlegaLbl').textContent = '¿LLEGA A VIVIENDAS?'; $('statLlega').textContent = llegaBorde ? 'SÍ' : 'NO';
@@ -1293,6 +1301,12 @@ function mostrarPanelInteractivo(mostrar) {
   if (!mostrar) salirDeModoDibujo();
 }
 
+function mostrarPanelCuadrillas(mostrar) {
+  $('panelCuadrillas').classList.toggle('visible', mostrar);
+  $('veredicto').style.display = mostrar ? 'none' : '';
+  $('fuentes').style.display = mostrar ? 'none' : '';
+}
+
 function actualizarEtiquetasInteractivo() {
   $('viDirVal').textContent = `${$('viDir').value}°`;
   $('viVelVal').textContent = `${$('viVel').value} km/h`;
@@ -1345,15 +1359,17 @@ function wireUI() {
   });
   $('btnBase').addEventListener('click', () => {
     state.escenarioActual = 'base'; state.frameIdx = 0; state.modoRiesgo = false;
-    $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active');
+    $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active'); $('btnCuadrillas').classList.remove('active');
     mostrarPanelInteractivo(false);
+    mostrarPanelCuadrillas(false);
     ocultarCortafuegosViz();
     aplicarFrame();
   });
   $('btnCortafuegos').addEventListener('click', () => {
     state.escenarioActual = 'cortafuegos250'; state.frameIdx = 0; state.modoRiesgo = false;
-    $('btnCortafuegos').classList.add('active'); $('btnBase').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active');
+    $('btnCortafuegos').classList.add('active'); $('btnBase').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active'); $('btnCuadrillas').classList.remove('active');
     mostrarPanelInteractivo(false);
+    mostrarPanelCuadrillas(false);
     aplicarFrame();
     iniciarAnimCortafuegos();
   });
@@ -1361,7 +1377,9 @@ function wireUI() {
     const activar = !state.modoRiesgo;
     $('btnRiesgo').classList.toggle('active', activar);
     $('btnInteractivo').classList.remove('active');
+    $('btnCuadrillas').classList.remove('active');
     mostrarPanelInteractivo(false);
+    mostrarPanelCuadrillas(false);
     if (activar) {
       ocultarCortafuegosViz();
     } else if (state.escenarioActual === 'cortafuegos250') {
@@ -1370,11 +1388,21 @@ function wireUI() {
     aplicarMapaDeRiesgo(activar);
   });
   $('btnInteractivo').addEventListener('click', () => {
-    $('btnBase').classList.remove('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active');
+    $('btnBase').classList.remove('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnCuadrillas').classList.remove('active');
     $('btnInteractivo').classList.add('active');
     if (state.modoRiesgo) aplicarMapaDeRiesgo(false);
     ocultarCortafuegosViz();
+    mostrarPanelCuadrillas(false);
     mostrarPanelInteractivo(true);
+  });
+  $('btnCuadrillas').addEventListener('click', () => {
+    $('btnBase').classList.remove('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active');
+    $('btnCuadrillas').classList.add('active');
+    if (state.modoRiesgo) aplicarMapaDeRiesgo(false);
+    ocultarCortafuegosViz();
+    mostrarPanelInteractivo(false);
+    mostrarPanelCuadrillas(true);
+    activarDronYCalcularCuadrillas();
   });
   $('viDir').addEventListener('input', actualizarEtiquetasInteractivo);
   $('viVel').addEventListener('input', actualizarEtiquetasInteractivo);
@@ -1535,6 +1563,8 @@ function procesarComandoDeVoz(textoCrudo) {
     if (!state.modoRiesgo) $('btnRiesgo').click();
   } else if (/cortafuego/.test(texto)) {
     $('btnCortafuegos').click();
+  } else if (/dron|cuadrilla/.test(texto)) {
+    $('btnCuadrillas').click();
   } else if (/sin intervenci|normal|base\b/.test(texto)) {
     $('btnBase').click();
   } else if (/pausa|detener|para\b/.test(texto)) {
@@ -1826,9 +1856,132 @@ function actualizarLlegadaBomberos(minutos) {
   $('statBomberos').classList.toggle('llego', llego);
 }
 
+/* ------------- dron + cuadrillas: cuánta gente hace falta (Monte Carlo) -------------
+ * Secuencia que pidió el equipo: el incendio empieza y los bomberos NO llegan
+ * de inmediato (usa el mismo tiempo real de respuesta de arriba, 22 min). Al
+ * llegar, recién ahí se activa el dron: escanea el frente y, con ese estado
+ * del incendio, se corre un barrido de Monte Carlo (igual método que la
+ * sección 11.3 del cuaderno: simular_incendio con línea construida durante el
+ * incendio) para recomendar cuántas cuadrillas hacen falta para la franja
+ * real a 250 m. rendimiento_m_h = 150 m/h por cuadrilla es el mismo supuesto
+ * declarado en parametros_modelo.csv / el cuaderno. */
+const CUADRILLAS_RENDIMIENTO_MH = 150;
+const CUADRILLAS_CANDIDATOS = [2, 4, 6]; // mismos valores probados en la sección 11.3 del cuaderno
+const CUADRILLAS_CORRIDAS_MC = 10; // por candidato — barrido liviano para que corra fluido en el navegador
+// Se recomienda la menor cantidad que baja P(viviendas) a ≤3 % (rango real: 1,0-3,0 %, informe 5.4).
+// OJO: a diferencia de la sección 11.3 del cuaderno (que usa el viento real muestreado hora a hora),
+// este modo reutiliza el viento del "peor día" que ya usan los demás escenarios de esta app (ver panel
+// de fuentes) — es la condición más exigente, así que puede que NINGÚN candidato baje de 3 %; en ese
+// caso se recomienda igual el mejor de los probados y se avisa, en vez de fingir que alcanza.
+const CUADRILLAS_META_PCT = 3.0;
+
+const dronPulso = { activo: false, t: 0, destino: null };
+function dispararPulsoDron(destino) {
+  dronPulso.activo = true; dronPulso.t = 0; dronPulso.destino = destino.clone();
+}
+function actualizarPulsoDron(dt) {
+  if (!dronPulso.activo || !anilloEscaneo) return;
+  dronPulso.t += dt;
+  const dur = 1.7;
+  const u = Math.min(1, dronPulso.t / dur);
+  anilloEscaneo.position.set(dronPulso.destino.x, dronPulso.destino.y - WORLD_SIZE * 0.095, dronPulso.destino.z);
+  const esc = 1 + u * 2.5;
+  anilloEscaneo.scale.set(esc, esc, esc);
+  anilloEscaneo.material.opacity = Math.sin(Math.min(1, u) * Math.PI) * 0.8;
+  if (drone && drone.userData.luz) drone.userData.luz.intensity = 3 + Math.sin(dronPulso.t * 14) * 2;
+  if (u >= 1) { dronPulso.activo = false; if (dronPulso.t > dur) dronPulso.t = 0; }
+}
+
+const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
+
+let secuenciaCuadrillasActiva = false;
+async function activarDronYCalcularCuadrillas() {
+  if (secuenciaCuadrillasActiva || !lineaCortafuegos250Flat) return;
+  secuenciaCuadrillasActiva = true;
+  const btn = $('btnCuadrillas');
+  btn.disabled = true;
+  $('cuBarra').style.width = '0%';
+  $('cuResultado').textContent = '';
+  $('cuEstado').textContent = `Incendio detectado. Bomberos en camino (≈${BOMBEROS_TIEMPO_MIN} min)…`;
+  await yieldFrame();
+
+  const ignicionI = state.terreno.ignicion[0], ignicionJ = state.terreno.ignicion[1];
+  const vientoMs = state.terreno.vientoMs, dirDesde = state.terreno.vientoDirDesde, humedadPct = state.terreno.clima.humedadPct;
+  const maxPasos = Math.round(8 * 60 / state.parametros.minutosPorPaso);
+
+  dispararPulsoDron(introState.destino);
+  $('cuEstado').textContent = 'DRON-01 ACTIVADO: escaneando el frente de fuego…';
+  await yieldFrame();
+
+  const gen = state.automata.recomendarCuadrillasGen({
+    ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos,
+    linea: lineaCortafuegos250Flat, tLlegadaMin: BOMBEROS_TIEMPO_MIN,
+    rendimientoMH: CUADRILLAS_RENDIMIENTO_MH, candidatos: CUADRILLAS_CANDIDATOS, corridas: CUADRILLAS_CORRIDAS_MC,
+  });
+  $('cuEstado').textContent = 'Calculando cuadrillas necesarias (Monte Carlo, autómata calibrado)…';
+  let paso = gen.next();
+  while (!paso.done) {
+    $('cuBarra').style.width = `${Math.round(paso.value * 100)}%`;
+    await yieldFrame();
+    paso = gen.next();
+  }
+  const resultados = paso.value; // [{cuadrillas, pViviendas, haMedia, corridas}]
+
+  const alcanzaMeta = resultados.find((r) => r.pViviendas * 100 <= CUADRILLAS_META_PCT);
+  const elegido = alcanzaMeta || resultados.reduce((a, b) => (b.pViviendas < a.pViviendas ? b : a));
+
+  $('cuBarra').style.width = '100%';
+  $('cuEstado').textContent = alcanzaMeta
+    ? `Recomendación del dron: ${elegido.cuadrillas} cuadrillas (línea real a 250 m, rendimiento 150 m/h) — baja el riesgo a ${CUADRILLAS_META_PCT}% o menos.`
+    : `Viento del "peor día": ni siquiera ${elegido.cuadrillas} cuadrillas bajan el riesgo de 3 %. Se recomienda la mejor opción probada, pero ese día hace falta además alerta temprana y prohibir quemas (ver recomendación del informe).`;
+  $('cuResultado').innerHTML = resultados.map((r) => {
+    const marca = r.cuadrillas === elegido.cuadrillas ? ' ✓' : '';
+    return `${r.cuadrillas} cuadrillas: P(viviendas) ≈ ${(r.pViviendas * 100).toFixed(1)}%${marca}`;
+  }).join(' · ');
+  $('statCuadrillas').textContent = `${elegido.cuadrillas} (P ≈ ${(elegido.pViviendas * 100).toFixed(1)}%)`;
+  await yieldFrame();
+
+  // Corrida final "de verdad" (no liviana) con la cantidad recomendada: se
+  // guarda como cuadro a cuadro, igual que los demás escenarios, para que se
+  // reproduzca por la línea de tiempo normal — incluye la espera inicial, la
+  // llegada del camión (mismo reloj) y la construcción de la línea.
+  const frames = state.automata.simular({
+    ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos, guardarCada: 4,
+    linea: lineaCortafuegos250Flat, tLlegadaMin: BOMBEROS_TIEMPO_MIN,
+    cuadrillas: elegido.cuadrillas, rendimientoMH: CUADRILLAS_RENDIMIENTO_MH,
+  });
+  state.escenarios.cuadrillas = {
+    nombre: 'cuadrillas', dtMin: state.parametros.minutosPorPaso, pasosGuardadosCada: 4,
+    numFrames: frames.length, frames,
+  };
+  state.escenarioActual = 'cuadrillas';
+  state.frameIdx = 0;
+  state.modoRiesgo = false;
+  fireMesh.visible = false;
+  aplicarFrame();
+  state.playing = true; setIconoPlay(true);
+  btn.disabled = false;
+  secuenciaCuadrillasActiva = false;
+}
+
+// Mientras una estructura está dañada, sigue "ardiendo" visualmente: emite
+// fuego/humo en su posición cada frame (mismo pool de partículas que las
+// celdas en llamas), para que se note que la vivienda/granja quedó encendida
+// y no solo oscurecida. Se detiene en reiniciarEstructuras().
+function actualizarFuegoEstructurasDanadas(dt) {
+  for (const e of estructurasColocadas) {
+    if (!e.danada || !e.radioDanio) continue;
+    const [ex, ez] = xzDe(e.i, e.j);
+    const ey = e.obj.position.y;
+    if (Math.random() < dt * 5) emitirFuego(ex, ey + 0.25, ez);
+    if (Math.random() < dt * 2.2) emitirHumo(ex, ey + 0.5, ez, true);
+  }
+}
+
 // Se llama desde aplicarFrame() por cada celda en llamas (v===2); si cae
 // dentro del radio de una estructura todavía sana, la "daña" una sola vez:
-// destello de ignición + materiales ennegrecidos, igual que el terreno.
+// destello de ignición + materiales ennegrecidos, igual que el terreno — y a
+// partir de ahí queda ardiendo (ver actualizarFuegoEstructurasDanadas).
 function verificarDanioEstructuras(x, z) {
   for (const e of estructurasColocadas) {
     if (e.danada || !e.radioDanio) continue;
@@ -2056,6 +2209,8 @@ async function main() {
     actualizarHumo(dt);
     actualizarFuego(dt);
     actualizarDestellos(dt);
+    actualizarPulsoDron(dt);
+    actualizarFuegoEstructurasDanadas(dt);
     actualizarNubes(dt);
     actualizarAnimCortafuegos(dt);
     if (!introState.activo && !state.modoRiesgo) {

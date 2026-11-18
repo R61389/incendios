@@ -232,6 +232,22 @@
   #btnSimularInteractivo:disabled { opacity: .5; cursor: default; }
   .piEstado { margin-top: 9px; font-size: 9.5px; color: var(--text-dim); line-height: 1.4; }
 
+  /* ---------- dron + cuadrillas: Monte Carlo de cuántas cuadrillas hacen falta ---------- */
+  #panelCuadrillas {
+    display: none; pointer-events: auto; width: min(560px, 94vw); padding: 10px 14px 12px;
+    font-family: var(--mono); --cnc: var(--cyan); --cut: 11px;
+  }
+  #panelCuadrillas.visible { display: block; }
+  #panelCuadrillas .hd {
+    font-size: 9.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan);
+    display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 8px;
+  }
+  #panelCuadrillas .hd svg.icon { fill: var(--cyan); }
+  .cuEstado { font-size: 10px; color: var(--text); line-height: 1.4; min-height: 14px; }
+  .cuBarraWrap { margin-top: 8px; height: 3px; background: rgba(255,255,255,.08); border-radius: 2px; overflow: hidden; }
+  .cuBarra { height: 100%; width: 0%; background: var(--cyan); transition: width .15s ease; }
+  .cuResultado { margin-top: 9px; font-size: 9.5px; color: var(--text-dim); line-height: 1.5; }
+
   #timeline {
     pointer-events: auto; display: flex; align-items: center; gap: 12px; padding: 7px 16px 7px 7px;
     width: min(560px, 94vw); --cnc: var(--cyan); --cut: 11px;
@@ -399,6 +415,10 @@
     <symbol id="i-skip" viewBox="0 0 24 24"><path d="M6 5v14l9-7z"/><rect x="16.5" y="5" width="2.4" height="14" rx="1"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5.5A3.5 3.5 0 0 0 12 15z"/><path d="M19 11.5a7 7 0 0 1-14 0H3.3a8.7 8.7 0 0 0 7.9 8.65V22h1.6v-1.85a8.7 8.7 0 0 0 7.9-8.65H19z"/></symbol>
     <symbol id="i-draw" viewBox="0 0 24 24"><path d="M3 21l1.1-4.6 4.5 4.5zm2.2-6l12-12 3.8 3.8-12 12z"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24">
+      <path fill-rule="evenodd" clip-rule="evenodd" d="M2,12 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 M5,12 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0"/>
+      <circle cx="12" cy="12" r="3.3"/>
+    </symbol>
   </defs>
 </svg>
 
@@ -455,6 +475,7 @@
   <div class="row"><span class="label">VEG. ARBÓREA</span><span class="val" id="statArborea">—</span></div>
   <div class="row"><span class="label">OTRA VEG.</span><span class="val" id="statOtraVeg">—</span></div>
   <div class="row"><span class="label">BOMBEROS</span><span class="val" id="statBomberos">—</span></div>
+  <div class="row"><span class="label">CUADRILLAS</span><span class="val" id="statCuadrillas">—</span></div>
 </div>
 
 <div id="hud">
@@ -483,6 +504,14 @@
     </div>
     <div class="piEstado" id="piEstado">Arrastra sobre el terreno (con "Dibujar cortafuegos" activo) para trazar tu propia línea de corte, ajusta el viento/humedad y toca "Simular".</div>
   </div>
+  <div id="panelCuadrillas" class="tpanel">
+    <div class="hd">
+      <svg class="icon"><use href="#i-scan"/></svg>DRON + CUADRILLAS — cuántas personas hacen falta
+    </div>
+    <div class="cuEstado" id="cuEstado">Los bomberos no llegan de inmediato: el dron recién se activa cuando llegan, para escanear el frente y calcular con Monte Carlo cuántas cuadrillas hacen falta para la línea real a 250 m.</div>
+    <div class="cuBarraWrap"><div class="cuBarra" id="cuBarra"></div></div>
+    <div class="cuResultado" id="cuResultado"></div>
+  </div>
   <div id="veredicto" class="tpanel">
     <button type="button" class="vHead" id="veredictoToggle" title="Toca para ver el detalle">
       <svg class="icon"><use href="#i-shield"/></svg>
@@ -507,6 +536,7 @@
       <div><b>Modo interactivo:</b> corre el mismo autómata y los mismos coeficientes calibrados (p_h, a, c1, c2, vegetación) directamente en tu navegador (js/automata.js), pero con el viento/humedad que elijas y el cortafuegos que dibujes — es una simulación propia tuya, no una corrida validada contra el incendio real. La humedad no estaba en el modelo original de Alexandridis et al.; se agregó un factor simple y declarado para que el control tenga efecto (ver comentario en automata.js).</div>
       <div><b>Vegetación quemada por tipo:</b> columna clase_esa (10 arbórea, 20 matorral, 30 pastizal, 40 cultivo). El CSV no trae número de plantas individuales, solo tipo y densidad cualitativa por celda de 25×25 m — por eso se muestra en celdas/hectáreas, no en "plantas".</div>
       <div><b>Tiempo de respuesta de bomberos:</b> Unidad de Bomberos de la Policía Boliviana, Av. Circuito Bolivia (orilla de la laguna Alalay, Cochabamba) hasta el punto de ignición real — 8,1 km en línea recta. SUPUESTO declarado (no hay ruta real disponible): factor vial ×1,35 (≈11 km por calle) y 30 km/h promedio (tránsito urbano + camino de montaña) → ≈22 min. El camión viaja ese tiempo real dentro de la simulación, venga del escenario que venga.</div>
+      <div><b>Dron + cuadrillas:</b> mismo método que la sección 11.3 del cuaderno (simular_incendio con línea construida durante el incendio, "ataque indirecto"): recién al llegar los bomberos (≈22 min) se activa el dron y se corren 14 corridas Monte Carlo por cada cantidad candidata de cuadrillas (2, 4 y 6, los mismos valores probados en el cuaderno) sobre la franja real a 250 m, con un rendimiento de 150 m/h por cuadrilla (SUPUESTO declarado, igual que rendimiento_m_h en parametros_modelo.csv — a reemplazar cuando se confirme con la Brigada). Se recomienda la menor cantidad que baja la probabilidad de alcanzar las viviendas a 3 % o menos.</div>
     </div>
   </div>
   <div id="timeline" class="tpanel">
@@ -520,6 +550,7 @@
       <button class="seg" id="btnCortafuegos"><svg class="icon"><use href="#i-shield"/></svg><span>Cortafuegos 250m</span></button>
       <button class="seg" id="btnRiesgo"><svg class="icon"><use href="#i-chart"/></svg><span>Mapa de riesgo</span></button>
       <button class="seg" id="btnInteractivo"><svg class="icon"><use href="#i-draw"/></svg><span>Interactivo</span></button>
+      <button class="seg" id="btnCuadrillas"><svg class="icon"><use href="#i-scan"/></svg><span>Dron + cuadrillas</span></button>
     </div>
     <button id="btnVoz" class="tpanel"><svg class="icon"><use href="#i-mic"/></svg><span>Voz</span></button>
     <button id="btnStereo" class="tpanel"><svg class="icon"><use href="#i-phone"/></svg><span>Cardboard</span></button>

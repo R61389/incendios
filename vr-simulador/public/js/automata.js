@@ -38,6 +38,10 @@ export function construirAutomata(terreno, parametros) {
   const PDEN = new Float64Array(N * N);
   const COMBUSTIBLE = new Uint8Array(N * N);
   const TAU = new Int16Array(N * N);
+  // Borde urbano (igual que BORDE en el cuaderno: celdas combustibles vecinas
+  // —vecindad de Moore 3×3— a una celda urbana). Si una celda del borde arde,
+  // el fuego "alcanzó las viviendas".
+  const BORDE = new Uint8Array(N * N);
 
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
@@ -50,6 +54,18 @@ export function construirAutomata(terreno, parametros) {
       COMBUSTIBLE[k] = combustible ? 1 : 0;
       PVEG[k] = parametros.pVeg[String(c)] ?? 0;
       TAU[k] = c === 10 ? parametros.pasosArdiendoArborea : parametros.pasosArdiendo;
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const k = i * N + j;
+      if (!COMBUSTIBLE[k]) continue;
+      for (let di = -1; di <= 1 && !BORDE[k]; di++) {
+        for (let dj = -1; dj <= 1 && !BORDE[k]; dj++) {
+          const ii = i + di, jj = j + dj;
+          if (ii >= 0 && jj >= 0 && ii < N && jj < N && terreno.urbano[ii][jj]) BORDE[k] = 1;
+        }
+      }
     }
   }
 
@@ -137,32 +153,100 @@ export function construirAutomata(terreno, parametros) {
     return Math.min(2.5, Math.max(0.15, 1 + k * (ref - humedadPct)));
   }
 
-  function simular({ ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos, estadoInicial, guardarCada = 4, onProgreso }) {
+  // Cortafuegos construido durante el incendio (ataque indirecto), igual que
+  // simular_incendio(..., linea, t_llegada, cuadrillas, rendimiento) del
+  // cuaderno: a partir del minuto de llegada, en cada paso se vuelven no
+  // quemables tantas celdas de la línea como permite el rendimiento
+  // (cuadrillas × m/h × minutos_por_paso / 60 / tamaño de celda), empezando
+  // por el tramo de línea más cercano al fuego.
+  function iniciarConstruccionLinea(lineaMask, E) {
+    const pendientes = [];
+    for (let i = 0; i < N; i++) {
+      for (let j = 0; j < N; j++) {
+        const k = i * N + j;
+        if (lineaMask[k] && E[k] === 1) pendientes.push([i, j]);
+      }
+    }
+    return pendientes;
+  }
+
+  function avanzarConstruccionLinea(E, pendientes, construidasPorPaso, acumuladoRef) {
+    if (!pendientes.length) return acumuladoRef.v;
+    let sumI = 0, sumJ = 0, n = 0;
+    for (let k = 0; k < N * N; k++) {
+      if (E[k] === 2) { sumI += Math.floor(k / N); sumJ += k % N; n++; }
+    }
+    if (n === 0) return acumuladoRef.v;
+    const fi = sumI / n, fj = sumJ / n;
+    pendientes.sort((a, b) => ((a[0] - fi) ** 2 + (a[1] - fj) ** 2) - ((b[0] - fi) ** 2 + (b[1] - fj) ** 2));
+    acumuladoRef.v += construidasPorPaso;
+    while (acumuladoRef.v >= 1 && pendientes.length) {
+      const [i, j] = pendientes.shift();
+      acumuladoRef.v -= 1;
+      const k = i * N + j;
+      if (E[k] === 1) E[k] = 0;
+    }
+    return acumuladoRef.v;
+  }
+
+  function simular({
+    ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos, estadoInicial, guardarCada = 4, onProgreso,
+    linea, tLlegadaMin, cuadrillas, rendimientoMH, soloResultado = false,
+  }) {
     const phEfectivo = Math.min(1, Math.max(0, parametros.pH * factorHumedad(humedadPct)));
     const base = estadoInicial || COMBUSTIBLE;
     const E = new Uint8Array(N * N);
     for (let k = 0; k < N * N; k++) E[k] = base[k] ? 1 : 0;
     const R = new Int16Array(N * N);
     const igK = ignicionI * N + ignicionJ;
+    if (E[igK] !== 1) {
+      return soloResultado ? { ha: 0, llegaBorde: false, pasoBorde: null, pasos: 0 } : [];
+    }
     E[igK] = 2;
     R[igK] = TAU[igK];
 
     const Pk = matricesProbabilidad(vientoMs, dirDesde, phEfectivo);
     const saltos = probSaltos(vientoMs, dirDesde);
 
-    const cuadros = [E.slice()];
+    const dtMin = parametros.minutosPorPaso;
+    let pendientes = null, construidasPorPaso = 0;
+    const acumulado = { v: 0 };
+    if (linea && cuadrillas > 0) {
+      pendientes = iniciarConstruccionLinea(linea, E);
+      construidasPorPaso = (cuadrillas * rendimientoMH * dtMin) / 60 / parametros.tamanoCeldaM;
+    }
+
+    const cuadros = soloResultado ? null : [E.slice()];
     let estado = E, radio = R;
+    let llegaBorde = BORDE[igK] === 1, pasoBorde = llegaBorde ? 0 : null;
+    let pasosHechos = 0;
     for (let paso_ = 0; paso_ < maxPasos; paso_++) {
+      if (pendientes && tLlegadaMin != null && paso_ * dtMin >= tLlegadaMin) {
+        avanzarConstruccionLinea(estado, pendientes, construidasPorPaso, acumulado);
+      }
       const [E2, R2] = paso(estado, radio, Pk, saltos);
       estado = E2; radio = R2;
-      if ((paso_ + 1) % guardarCada === 0) cuadros.push(estado.slice());
+      pasosHechos = paso_ + 1;
+      if (!llegaBorde) {
+        for (let k = 0; k < N * N; k++) {
+          if (estado[k] === 2 && BORDE[k]) { llegaBorde = true; pasoBorde = paso_ + 1; break; }
+        }
+      }
+      if (!soloResultado && (paso_ + 1) % guardarCada === 0) cuadros.push(estado.slice());
       let hayFuego = false;
       for (let k = 0; k < N * N; k++) { if (estado[k] === 2) { hayFuego = true; break; } }
       if (onProgreso && paso_ % 8 === 0) onProgreso(paso_ / maxPasos);
       if (!hayFuego) break;
     }
-    cuadros.push(estado.slice());
 
+    if (soloResultado) {
+      let haQuemadas = 0;
+      for (let k = 0; k < N * N; k++) if (estado[k] >= 2) haQuemadas++;
+      const ha = haQuemadas * (parametros.tamanoCeldaM ** 2) / 10000;
+      return { ha, llegaBorde, pasoBorde, pasos: pasosHechos };
+    }
+
+    cuadros.push(estado.slice());
     // de Uint8Array planos a arrays 2D (mismo formato que fuego_base.json)
     const frames = cuadros.map((cu) => {
       const f = [];
@@ -176,5 +260,40 @@ export function construirAutomata(terreno, parametros) {
     return frames;
   }
 
-  return { simular, N, COMBUSTIBLE, phEfectivoDe: (h) => Math.min(1, Math.max(0, parametros.pH * factorHumedad(h))) };
+  // Barrido de Monte Carlo para recomendar cuántas cuadrillas se necesitan:
+  // repite simular_incendio con cortafuegos construido durante la corrida
+  // (igual que la sección 11.3 del cuaderno) para cada cantidad candidata de
+  // cuadrillas, y promedia P(alcanza las viviendas) y hectáreas quemadas. Es
+  // un generador: cada yield entrega la fracción de avance (0..1), y el
+  // valor final (gen.next().value cuando done) es el array de resultados.
+  // Quien lo consuma debe ceder el hilo (setTimeout/rAF) entre llamadas a
+  // next() para no congelar la pestaña mientras corre.
+  function* recomendarCuadrillasGen({
+    ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos, linea,
+    tLlegadaMin, rendimientoMH, candidatos, corridas,
+  }) {
+    const resultados = [];
+    const total = candidatos.length * corridas;
+    let hechas = 0;
+    for (const cuadrillas of candidatos) {
+      let llegas = 0, haSum = 0;
+      for (let r = 0; r < corridas; r++) {
+        const res = simular({
+          ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos,
+          linea, tLlegadaMin, cuadrillas, rendimientoMH, soloResultado: true,
+        });
+        if (res.llegaBorde) llegas++;
+        haSum += res.ha;
+        hechas++;
+        yield hechas / total;
+      }
+      resultados.push({ cuadrillas, pViviendas: llegas / corridas, haMedia: haSum / corridas, corridas });
+    }
+    return resultados;
+  }
+
+  return {
+    simular, recomendarCuadrillasGen, N, COMBUSTIBLE, BORDE,
+    phEfectivoDe: (h) => Math.min(1, Math.max(0, parametros.pH * factorHumedad(h))),
+  };
 }
