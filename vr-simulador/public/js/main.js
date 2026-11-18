@@ -841,7 +841,10 @@ function aplicarFrame() {
     estadoFuegoAnterior = new Uint8Array(combustibleIdx.length);
     fuegoVisualHasta = new Float32Array(combustibleIdx.length);
   }
-  if (state.frameIdx === 0) { estadoFuegoAnterior.fill(0); fuegoVisualHasta.fill(0); reiniciarEstructuras(); }
+  if (state.frameIdx === 0) {
+    estadoFuegoAnterior.fill(0); fuegoVisualHasta.fill(0); reiniciarEstructuras();
+    if (state.escenarioActual === 'cuadrillas' && resultadoCuadrillasPendiente) dronActivadoEnEscena = false;
+  }
 
   // celdas quemadas por tipo de vegetación real (clase_esa de la grilla): es
   // el conteo más cercano a "plantas afectadas" que da el dato real — el CSV
@@ -1357,6 +1360,14 @@ function wireUI() {
   $('btnVoz').addEventListener('click', () => {
     if (vozActiva) detenerComandosDeVoz(); else iniciarComandosDeVoz();
   });
+  $('btnVerVivienda').addEventListener('click', () => irALaVivienda());
+  $('btnDerrotaVerCerca').addEventListener('click', () => {
+    const idx = Number($('derrota').dataset.estructuraIdx);
+    const e = estructurasColocadas[idx];
+    ocultarNotificacionDerrota();
+    if (e) volarCamaraAEstructura(e);
+  });
+  $('btnDerrotaCerrar').addEventListener('click', () => ocultarNotificacionDerrota());
   $('btnBase').addEventListener('click', () => {
     state.escenarioActual = 'base'; state.frameIdx = 0; state.modoRiesgo = false;
     $('btnBase').classList.add('active'); $('btnCortafuegos').classList.remove('active'); $('btnRiesgo').classList.remove('active'); $('btnInteractivo').classList.remove('active'); $('btnCuadrillas').classList.remove('active');
@@ -1775,7 +1786,7 @@ function construirDron() {
 // avícola del incendio real del 12/08/2026 que calibra el modelo.
 const estructurasColocadas = []; // [{ i, j, obj, meshes, radioDanio, danada }]
 
-function colocarEstructura(modeloGLTF, i, j, anchoDeseado, rotacionYGrados, radioDanio) {
+function colocarEstructura(modeloGLTF, i, j, anchoDeseado, rotacionYGrados, radioDanio, tipo) {
   if (!modeloGLTF) return null;
   const modelo = modeloGLTF.clone(true);
   const meshes = [];
@@ -1801,7 +1812,7 @@ function colocarEstructura(modeloGLTF, i, j, anchoDeseado, rotacionYGrados, radi
   const [x, z] = xzDe(i, j);
   contenedor.position.set(x, heightAt(i, j) + (tam.y * escala) / 2, z);
   scene.add(contenedor);
-  const entrada = { i, j, obj: contenedor, meshes, radioDanio, danada: false };
+  const entrada = { i, j, obj: contenedor, meshes, radioDanio, danada: false, tipo };
   estructurasColocadas.push(entrada);
   return entrada;
 }
@@ -1815,6 +1826,7 @@ function reiniciarEstructuras() {
       if (m.material.emissive) m.material.emissive.setRGB(0, 0, 0);
     }
   }
+  ocultarNotificacionDerrota();
 }
 
 // --- tiempo de respuesta real de los bomberos ---
@@ -1831,9 +1843,9 @@ const BOMBEROS_TIEMPO_MIN = 22;
 let camionEntrada = null;
 
 function construirEstructurasReales() {
-  colocarEstructura(modeloVivienda, 74, 35, 1.5, 25, 2.5);
-  colocarEstructura(modeloAvicola, 78, 40, 2.3, -20, 2.5);
-  camionEntrada = colocarEstructura(modeloCamion, 82, 40, 1.05, 160, 0); // no se "quema": llega a apoyar
+  colocarEstructura(modeloVivienda, 74, 35, 1.5, 25, 2.5, 'vivienda');
+  colocarEstructura(modeloAvicola, 78, 40, 2.3, -20, 2.5, 'avicola');
+  camionEntrada = colocarEstructura(modeloCamion, 82, 40, 1.05, 160, 0, 'camion'); // no se "quema": llega a apoyar
   if (camionEntrada) {
     camionEntrada.posFinal = camionEntrada.obj.position.clone();
     camionEntrada.posInicial = camionEntrada.posFinal.clone().add(new THREE.Vector3(-5, 0, 17));
@@ -1854,6 +1866,7 @@ function actualizarLlegadaBomberos(minutos) {
     ? 'EN EL LUGAR'
     : `EN CAMINO — ${Math.max(0, Math.ceil(BOMBEROS_TIEMPO_MIN - minutos))} MIN`;
   $('statBomberos').classList.toggle('llego', llego);
+  revelarResultadoCuadrillasSiCorresponde(minutos);
 }
 
 /* ------------- dron + cuadrillas: cuánta gente hace falta (Monte Carlo) -------------
@@ -1894,31 +1907,52 @@ function actualizarPulsoDron(dt) {
 
 const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
 
+// El dron se activa (visualmente) y recién ahí se revela la recomendación
+// cuando, DURANTE la reproducción, el camión realmente llega (mismo reloj
+// que BOMBEROS_TIEMPO_MIN) — no apenas se toca el botón. El cálculo de
+// Monte Carlo sí se hace antes (para poder generar la corrida completa),
+// pero el resultado se guarda y se muestra recién en ese momento.
+let dronActivadoEnEscena = false;
+let resultadoCuadrillasPendiente = null;
+function revelarResultadoCuadrillasSiCorresponde(minutos) {
+  if (state.escenarioActual !== 'cuadrillas' || dronActivadoEnEscena || !resultadoCuadrillasPendiente) return;
+  if (minutos < BOMBEROS_TIEMPO_MIN) return;
+  dronActivadoEnEscena = true;
+  dispararPulsoDron(introState.destino);
+  const { elegido, resultados, alcanzaMeta } = resultadoCuadrillasPendiente;
+  $('cuEstado').textContent = alcanzaMeta
+    ? `DRON-01 ACTIVADO: con los bomberos ya en el lugar, recomienda ${elegido.cuadrillas} cuadrillas (línea real a 250 m, rendimiento 150 m/h) — baja el riesgo a ${CUADRILLAS_META_PCT}% o menos.`
+    : `DRON-01 ACTIVADO: viento del "peor día", ni siquiera ${elegido.cuadrillas} cuadrillas bajan el riesgo de 3 %. Se recomienda la mejor opción probada, pero ese día hace falta además alerta temprana y prohibir quemas (ver recomendación del informe).`;
+  $('cuResultado').innerHTML = resultados.map((r) => {
+    const marca = r.cuadrillas === elegido.cuadrillas ? ' ✓' : '';
+    return `${r.cuadrillas} cuadrillas: P(viviendas) ≈ ${(r.pViviendas * 100).toFixed(1)}%${marca}`;
+  }).join(' · ');
+  $('statCuadrillas').textContent = `${elegido.cuadrillas} (P ≈ ${(elegido.pViviendas * 100).toFixed(1)}%)`;
+}
+
 let secuenciaCuadrillasActiva = false;
 async function activarDronYCalcularCuadrillas() {
   if (secuenciaCuadrillasActiva || !lineaCortafuegos250Flat) return;
   secuenciaCuadrillasActiva = true;
+  dronActivadoEnEscena = false;
+  resultadoCuadrillasPendiente = null;
   const btn = $('btnCuadrillas');
   btn.disabled = true;
   $('cuBarra').style.width = '0%';
   $('cuResultado').textContent = '';
-  $('cuEstado').textContent = `Incendio detectado. Bomberos en camino (≈${BOMBEROS_TIEMPO_MIN} min)…`;
+  $('cuEstado').textContent = `Incendio detectado. Bomberos en camino (≈${BOMBEROS_TIEMPO_MIN} min)… el dron se activará recién cuando lleguen.`;
   await yieldFrame();
 
   const ignicionI = state.terreno.ignicion[0], ignicionJ = state.terreno.ignicion[1];
   const vientoMs = state.terreno.vientoMs, dirDesde = state.terreno.vientoDirDesde, humedadPct = state.terreno.clima.humedadPct;
   const maxPasos = Math.round(8 * 60 / state.parametros.minutosPorPaso);
 
-  dispararPulsoDron(introState.destino);
-  $('cuEstado').textContent = 'DRON-01 ACTIVADO: escaneando el frente de fuego…';
-  await yieldFrame();
-
   const gen = state.automata.recomendarCuadrillasGen({
     ignicionI, ignicionJ, vientoMs, dirDesde, humedadPct, maxPasos,
     linea: lineaCortafuegos250Flat, tLlegadaMin: BOMBEROS_TIEMPO_MIN,
     rendimientoMH: CUADRILLAS_RENDIMIENTO_MH, candidatos: CUADRILLAS_CANDIDATOS, corridas: CUADRILLAS_CORRIDAS_MC,
   });
-  $('cuEstado').textContent = 'Calculando cuadrillas necesarias (Monte Carlo, autómata calibrado)…';
+  $('cuEstado').textContent = 'Preparando el cálculo de cuadrillas (Monte Carlo, autómata calibrado)…';
   let paso = gen.next();
   while (!paso.done) {
     $('cuBarra').style.width = `${Math.round(paso.value * 100)}%`;
@@ -1929,16 +1963,11 @@ async function activarDronYCalcularCuadrillas() {
 
   const alcanzaMeta = resultados.find((r) => r.pViviendas * 100 <= CUADRILLAS_META_PCT);
   const elegido = alcanzaMeta || resultados.reduce((a, b) => (b.pViviendas < a.pViviendas ? b : a));
+  resultadoCuadrillasPendiente = { elegido, resultados, alcanzaMeta };
 
   $('cuBarra').style.width = '100%';
-  $('cuEstado').textContent = alcanzaMeta
-    ? `Recomendación del dron: ${elegido.cuadrillas} cuadrillas (línea real a 250 m, rendimiento 150 m/h) — baja el riesgo a ${CUADRILLAS_META_PCT}% o menos.`
-    : `Viento del "peor día": ni siquiera ${elegido.cuadrillas} cuadrillas bajan el riesgo de 3 %. Se recomienda la mejor opción probada, pero ese día hace falta además alerta temprana y prohibir quemas (ver recomendación del informe).`;
-  $('cuResultado').innerHTML = resultados.map((r) => {
-    const marca = r.cuadrillas === elegido.cuadrillas ? ' ✓' : '';
-    return `${r.cuadrillas} cuadrillas: P(viviendas) ≈ ${(r.pViviendas * 100).toFixed(1)}%${marca}`;
-  }).join(' · ');
-  $('statCuadrillas').textContent = `${elegido.cuadrillas} (P ≈ ${(elegido.pViviendas * 100).toFixed(1)}%)`;
+  $('cuEstado').textContent = `Listo. Esperando a que los bomberos lleguen (≈${BOMBEROS_TIEMPO_MIN} min simulados) para activar el dron…`;
+  $('statCuadrillas').textContent = 'esperando dron…';
   await yieldFrame();
 
   // Corrida final "de verdad" (no liviana) con la cantidad recomendada: se
@@ -1978,6 +2007,21 @@ function actualizarFuegoEstructurasDanadas(dt) {
   }
 }
 
+const NOMBRE_ESTRUCTURA = { vivienda: 'la cabaña', avicola: 'la granja avícola' };
+
+// Notificación de "derrota": aparece la primera vez que el fuego alcanza
+// cualquiera de las dos viviendas reales (no el camión). Incluye un acceso
+// directo para acercar la cámara y ver el incendio de cerca.
+function mostrarNotificacionDerrota(entrada) {
+  const nombre = NOMBRE_ESTRUCTURA[entrada.tipo] || 'una vivienda';
+  $('derrotaTexto').textContent = `El fuego alcanzó ${nombre} antes de que se pudiera contener.`;
+  $('derrota').classList.add('visible');
+  $('derrota').dataset.estructuraIdx = String(estructurasColocadas.indexOf(entrada));
+}
+function ocultarNotificacionDerrota() {
+  $('derrota').classList.remove('visible');
+}
+
 // Se llama desde aplicarFrame() por cada celda en llamas (v===2); si cae
 // dentro del radio de una estructura todavía sana, la "daña" una sola vez:
 // destello de ignición + materiales ennegrecidos, igual que el terreno — y a
@@ -1993,8 +2037,47 @@ function verificarDanioEstructuras(x, z) {
         if (m.material.color) m.material.color.multiplyScalar(0.22);
         if (m.material.emissive) m.material.emissive.setRGB(0.12, 0.03, 0.01);
       }
+      if (e.tipo === 'vivienda' || e.tipo === 'avicola') mostrarNotificacionDerrota(e);
     }
   }
+}
+
+/* --------------------- acercar la cámara a una estructura --------------------- */
+const camaraAcercando = { activo: false, t: 0, origenPos: null, origenTarget: null, destPos: null, destTarget: null };
+function volarCamaraAEstructura(entrada) {
+  if (!entrada || !controls) return;
+  const pos = entrada.obj.position;
+  camaraAcercando.origenPos = camera.position.clone();
+  camaraAcercando.origenTarget = controls.target.clone();
+  const dirAlejada = camera.position.clone().sub(pos).setY(0);
+  if (dirAlejada.lengthSq() < 0.01) dirAlejada.set(0, 0, 1);
+  dirAlejada.normalize().multiplyScalar(4.5);
+  camaraAcercando.destPos = pos.clone().add(dirAlejada).add(new THREE.Vector3(0, 1.7, 0));
+  camaraAcercando.destTarget = pos.clone().add(new THREE.Vector3(0, 0.7, 0));
+  camaraAcercando.t = 0;
+  camaraAcercando.activo = true;
+  controls.enabled = false;
+}
+function actualizarCamaraAcercando(dt) {
+  if (!camaraAcercando.activo) return;
+  camaraAcercando.t += dt;
+  const u = Math.min(1, camaraAcercando.t / 1.6);
+  const s = facilitarSuave(u);
+  camera.position.lerpVectors(camaraAcercando.origenPos, camaraAcercando.destPos, s);
+  controls.target.lerpVectors(camaraAcercando.origenTarget, camaraAcercando.destTarget, s);
+  camera.lookAt(controls.target);
+  if (u >= 1) {
+    camaraAcercando.activo = false;
+    controls.enabled = true;
+    controls.update();
+  }
+}
+// Vivienda real por defecto (índice 0 en estructurasColocadas, ver
+// construirEstructurasReales): botón siempre disponible para ir a verla de
+// cerca, esté o no ardiendo todavía.
+function irALaVivienda() {
+  const e = estructurasColocadas.find((x) => x.tipo === 'vivienda');
+  if (e) volarCamaraAEstructura(e);
 }
 
 function construirPad(pos) {
@@ -2051,6 +2134,7 @@ function finalizarIntro() {
   $('stats').classList.add('visible');
   $('brand').classList.add('visible');
   $('compass').classList.add('visible');
+  $('btnVerVivienda').classList.add('visible');
   aplicarFrame();
 }
 
@@ -2210,6 +2294,7 @@ async function main() {
     actualizarFuego(dt);
     actualizarDestellos(dt);
     actualizarPulsoDron(dt);
+    actualizarCamaraAcercando(dt);
     actualizarFuegoEstructurasDanadas(dt);
     actualizarNubes(dt);
     actualizarAnimCortafuegos(dt);
@@ -2219,7 +2304,7 @@ async function main() {
     }
 
     if (!renderer.xr.isPresenting) {
-      if (!introState.activo) controls.update();
+      if (!introState.activo && !camaraAcercando.activo) controls.update();
       if (stereoActivo) {
         camera.quaternion.copy(quaternionDeOrientacion(orientacion.alpha, orientacion.beta, orientacion.gamma, window.orientation || 0));
         const w = window.innerWidth / 2, h = window.innerHeight;
