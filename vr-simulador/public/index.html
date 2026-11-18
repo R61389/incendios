@@ -114,17 +114,22 @@
   }
   #compass.visible { opacity: 1; }
 
-  /* ---------- acercar cámara a la vivienda ---------- */
-  #btnVerVivienda {
+  /* ---------- acercar cámara a la vivienda / al dron ---------- */
+  #botonesCamara {
     position: fixed; left: 12px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 10;
+    display: flex; gap: 7px; pointer-events: none;
+  }
+  #botonesCamara button {
     pointer-events: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 600; --cut: 10px;
     letter-spacing: .04em; text-transform: uppercase; border: none; cursor: pointer;
-    color: var(--amber); background: rgba(255,176,46,0.1); padding: 9px 13px;
-    display: flex; align-items: center; gap: 7px; --cnc: var(--amber);
+    padding: 9px 13px; display: flex; align-items: center; gap: 7px;
     opacity: 0; transition: opacity .6s ease;
   }
-  #btnVerVivienda.visible { opacity: 1; }
+  #botonesCamara button.visible { opacity: 1; }
+  #btnVerVivienda { color: var(--amber); background: rgba(255,176,46,0.1); --cnc: var(--amber); }
   #btnVerVivienda svg.icon { width: 14px; height: 14px; fill: var(--amber); }
+  #btnVerDron { color: var(--cyan); background: rgba(95,227,239,0.1); --cnc: var(--cyan); }
+  #btnVerDron svg.icon { width: 14px; height: 14px; fill: var(--cyan); }
 
   /* ---------- notificación de derrota: el fuego llegó a una vivienda ---------- */
   #derrota {
@@ -481,9 +486,14 @@
   <div class="txt"><b>INCENDIOS TUNARI · VR</b><span class="tag">SIM-522 GRUPO 3</span></div>
 </div>
 
-<button id="btnVerVivienda" class="tpanel" title="Acercar la cámara a la vivienda para ver el incendio de cerca">
-  <svg class="icon"><use href="#i-home"/></svg><span>Ver vivienda</span>
-</button>
+<div id="botonesCamara">
+  <button id="btnVerVivienda" class="tpanel" title="Acercar la cámara a la vivienda para ver el incendio de cerca">
+    <svg class="icon"><use href="#i-home"/></svg><span>Ver vivienda</span>
+  </button>
+  <button id="btnVerDron" class="tpanel" title="Volver a acercar la cámara al dron">
+    <svg class="icon"><use href="#i-scan"/></svg><span>Volver al dron</span>
+  </button>
+</div>
 
 <div id="derrota">
   <div class="derrotaCaja tpanel">

@@ -1361,6 +1361,7 @@ function wireUI() {
     if (vozActiva) detenerComandosDeVoz(); else iniciarComandosDeVoz();
   });
   $('btnVerVivienda').addEventListener('click', () => irALaVivienda());
+  $('btnVerDron').addEventListener('click', () => irAlDron());
   $('btnDerrotaVerCerca').addEventListener('click', () => {
     const idx = Number($('derrota').dataset.estructuraIdx);
     const e = estructurasColocadas[idx];
@@ -1914,20 +1915,35 @@ const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
 // pero el resultado se guarda y se muestra recién en ese momento.
 let dronActivadoEnEscena = false;
 let resultadoCuadrillasPendiente = null;
+// Secuencia pedida: el camión llega (se ve venir, con su cuenta regresiva
+// normal) -> recién ahí se activa el dron -> y solo cuando el dron termina
+// de escanear empieza lo demás (se revela la recomendación y las cuadrillas
+// arrancan a construir la línea). Por eso se PAUSA la reproducción justo al
+// llegar el camión, se la deja pausada mientras dura la animación del dron,
+// y se reanuda automáticamente al terminar.
+const DRON_ESCANEO_DUR_MS = 2200;
 function revelarResultadoCuadrillasSiCorresponde(minutos) {
   if (state.escenarioActual !== 'cuadrillas' || dronActivadoEnEscena || !resultadoCuadrillasPendiente) return;
   if (minutos < BOMBEROS_TIEMPO_MIN) return;
   dronActivadoEnEscena = true;
+  const estabaReproduciendo = state.playing;
+  state.playing = false;
+  setIconoPlay(false);
   dispararPulsoDron(introState.destino);
-  const { elegido, resultados, alcanzaMeta } = resultadoCuadrillasPendiente;
-  $('cuEstado').textContent = alcanzaMeta
-    ? `DRON-01 ACTIVADO: con los bomberos ya en el lugar, recomienda ${elegido.cuadrillas} cuadrillas (línea real a 250 m, rendimiento 150 m/h) — baja el riesgo a ${CUADRILLAS_META_PCT}% o menos.`
-    : `DRON-01 ACTIVADO: viento del "peor día", ni siquiera ${elegido.cuadrillas} cuadrillas bajan el riesgo de 3 %. Se recomienda la mejor opción probada, pero ese día hace falta además alerta temprana y prohibir quemas (ver recomendación del informe).`;
-  $('cuResultado').innerHTML = resultados.map((r) => {
-    const marca = r.cuadrillas === elegido.cuadrillas ? ' ✓' : '';
-    return `${r.cuadrillas} cuadrillas: P(viviendas) ≈ ${(r.pViviendas * 100).toFixed(1)}%${marca}`;
-  }).join(' · ');
-  $('statCuadrillas').textContent = `${elegido.cuadrillas} (P ≈ ${(elegido.pViviendas * 100).toFixed(1)}%)`;
+  $('cuEstado').textContent = 'DRON-01 ACTIVADO: escaneando el frente de fuego…';
+  setTimeout(() => {
+    const { elegido, resultados, alcanzaMeta } = resultadoCuadrillasPendiente;
+    $('cuEstado').textContent = alcanzaMeta
+      ? `Recomendación del dron: ${elegido.cuadrillas} cuadrillas (línea real a 250 m, rendimiento 150 m/h) — baja el riesgo a ${CUADRILLAS_META_PCT}% o menos.`
+      : `Recomendación del dron: viento del "peor día", ni siquiera ${elegido.cuadrillas} cuadrillas bajan el riesgo de 3 %. Se recomienda la mejor opción probada, pero ese día hace falta además alerta temprana y prohibir quemas (ver recomendación del informe).`;
+    $('cuResultado').innerHTML = resultados.map((r) => {
+      const marca = r.cuadrillas === elegido.cuadrillas ? ' ✓' : '';
+      return `${r.cuadrillas} cuadrillas: P(viviendas) ≈ ${(r.pViviendas * 100).toFixed(1)}%${marca}`;
+    }).join(' · ');
+    $('statCuadrillas').textContent = `${elegido.cuadrillas} (P ≈ ${(elegido.pViviendas * 100).toFixed(1)}%)`;
+    // reanuda: ahora sí, con la recomendación ya conocida, la línea empieza a construirse
+    if (estabaReproduciendo) { state.playing = true; setIconoPlay(true); }
+  }, DRON_ESCANEO_DUR_MS);
 }
 
 let secuenciaCuadrillasActiva = false;
@@ -2079,6 +2095,13 @@ function irALaVivienda() {
   const e = estructurasColocadas.find((x) => x.tipo === 'vivienda');
   if (e) volarCamaraAEstructura(e);
 }
+// Vuelve a acercar la cámara al dron, esté donde esté (hover fijo sobre el
+// punto de ignición una vez termina la intro). Reusa volarCamaraAEstructura
+// con un "objeto" liviano, ya que esa función solo necesita .obj.position.
+function irAlDron() {
+  if (!drone) return;
+  volarCamaraAEstructura({ obj: drone });
+}
 
 function construirPad(pos) {
   const base = new THREE.Mesh(
@@ -2135,6 +2158,7 @@ function finalizarIntro() {
   $('brand').classList.add('visible');
   $('compass').classList.add('visible');
   $('btnVerVivienda').classList.add('visible');
+  $('btnVerDron').classList.add('visible');
   aplicarFrame();
 }
 
